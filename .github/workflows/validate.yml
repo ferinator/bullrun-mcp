@@ -1,0 +1,42 @@
+name: Validate metadata
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+      - name: Validate JSON metadata
+        run: |
+          python - <<'PY'
+          import json
+          from pathlib import Path
+          from urllib.parse import urlparse
+
+          root = Path(".")
+          server = json.loads((root / "server.json").read_text())
+          glama = json.loads((root / "glama.json").read_text())
+
+          assert server["name"] == "org.bull-run/bullrun"
+          assert server["title"] == "Bullrun"
+          assert server["version"] == "0.1.2"
+          assert server["repository"]["url"] == "https://github.com/ferinator/bullrun-mcp"
+
+          remote_urls = [remote["url"] for remote in server.get("remotes", [])]
+          assert "https://mcp.bull-run.org/mcp" in remote_urls
+
+          assert glama["name"] == "Bullrun"
+          assert "finance" in glama.get("keywords", [])
+
+          for url in [server["repository"]["url"], *remote_urls]:
+            parsed = urlparse(url)
+            assert parsed.scheme == "https", url
+            assert parsed.netloc, url
+          PY
