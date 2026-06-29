@@ -1,0 +1,10 @@
+{
+  "$schema": "https://glama.ai/mcp/schemas/server.json",
+  "maintainers": ["ferinator"],
+  "name": "Bullrun",
+  "description": "Hosted remote MCP server for stock screening, company financials, ETF search, and personal portfolio analysis.",
+  "type": "mcp_server",
+  "status": "beta",
+  "transport": ["streamable-http"],
+  "keywords": ["finance", "stocks", "portfolio", "screening", "valuation", "etf", "oauth"]
+}
