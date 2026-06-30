@@ -1,0 +1,12 @@
+node_modules/
+dist/
+*.log
+.env
+.env.local
+
+# MCP Registry publishing — never commit the private key or the CLI binary
+key.pem
+mcp-registry-auth
+mcp-publisher
+mcp-publisher.exe
+mcp-publisher.tar.gz

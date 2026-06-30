@@ -11,10 +11,11 @@ MCP clients) into a stock-research analyst over global market data and your own 
 | **Glama connector** | https://glama.ai/mcp/connectors/org.bull-run/bullrun |
 | **Privacy policy** | https://bull-run.org/privacy |
 
-> Bullrun is a **hosted service** — there is nothing to install and no API key to manage. You
-> point your MCP client at the remote endpoint and sign in with Google. This repository holds the
-> connector's public metadata ([`server.json`](server.json)) and connection docs; the service
-> source is maintained privately.
+> Bullrun is primarily a **hosted service** — there is nothing to install and no API key to
+> manage for normal use. You point your MCP client at the remote endpoint and sign in with
+> Google. This repository holds the connector's public metadata ([`server.json`](server.json)),
+> connection docs, and a local stdio build of the MCP layer for directory/security checks. The
+> Bullrun application and data services remain maintained separately.
 
 ## Connect
 
@@ -64,6 +65,21 @@ read tools return market data and your own holdings, the per-user read tools acc
 (`full` by default, or `weights_only` to return only relative figures), and the draft tools never
 mutate live holdings. See the [privacy policy](https://bull-run.org/privacy).
 
+## Local stdio build
+
+The hosted endpoint above is the recommended integration. For directories that require building
+and running a local MCP server, this repo can run the MCP layer over stdio:
+
+```bash
+npm ci
+npm run build
+BULLRUN_API_BASE=https://bull-run.org node dist/stdio.js
+```
+
+Public market-data tools work without credentials. Portfolio and draft tools still require a
+Bullrun OAuth token in hosted clients and return an authentication-required error in anonymous
+stdio checks.
+
 ## License
 
-[MIT](LICENSE). This repository contains documentation and connector metadata only.
+[MIT](LICENSE).
