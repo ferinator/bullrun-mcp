@@ -49,12 +49,27 @@ Bullrun account after Google sign-in; the two draft tools require a Bullrun Pro 
 | `get_operating_kpis` | Domain KPIs — ARR, net revenue retention, RPO, billings, customer counts, payment & cross-border volume. |
 | `get_revenue_breakdown` | Segment, geography, product or customer revenue splits. |
 | `get_earnings_call_transcript` | Speaker-tagged earnings-call transcript chunks, fiscal-period filters and text search. |
-| `query_etfs` | Search ETFs by ticker / fund name, category, focus, domicile; profile, price history and holdings for an exact ticker. |
+| `search_etfs` | Discover ETFs by listing, classification, index, distribution policy, AUM, expense ratio and yield, with explicit scan coverage. |
+| `get_etf_snapshot` | Modular identity, classification, market, fund-data, cost, income and benchmark snapshot for one ETF listing. |
+| `get_etf_timeseries` | Daily/weekly/monthly price and price-return history; unsupported NAV and total-return series are reported explicitly. |
+| `get_etf_holdings` | Latest stored holdings with cursor pagination, covered weight and completeness assessment. |
+| `get_etf_exposures` | Holdings-derived sector, country, currency and asset exposure with resolution and weight coverage. |
+| `get_etf_risk` | Close-price drawdown, volatility, ratios and optional benchmark-relative risk. |
+| `compare_etfs` | Normalized side-by-side comparison across fund structure, costs, performance, risk and holdings. |
+| `analyze_etf_overlap` | Pairwise weighted overlap, economic similarity and price-behavior similarity with a separate confidence score. |
+| `analyze_portfolio_fit` | Signed-in portfolio versus candidate ETF using price history and holdings look-through. *(sign-in)* |
+| `simulate_etf_cost` | Expense, spread, commission and recurring-contribution cost simulation. |
+| `query_etfs` | Compatibility search/profile tool; new clients should prefer the focused ETF tools above. |
 | `list_portfolios` | Your virtual portfolios with value, day change, cost basis and total return. *(sign-in)* |
 | `get_portfolio_context` | Deep snapshot of one portfolio: every holding with weight, sector and return, plus Bullrun's insights. *(sign-in)* |
 | `get_portfolio_analytics` | Correlation/covariance, contribution-to-risk, factor exposure, sector/currency/country concentration, stress scenarios, and candidate-fit analysis. *(sign-in)* |
 | `create_portfolio_draft` | Draft a new paper portfolio from a plain-English brief. **Draft-only** — saved for review, never changes a live position. *(Pro)* |
 | `create_position_draft` | Suggest additions to an existing portfolio. **Draft-only** — saved for review. *(Pro)* |
+
+ETF results carry explicit coverage and warning fields. Historical NAV, distribution-adjusted
+total return, premium/discount, factor and thematic series are not synthesized when their source
+data is unavailable. Partial holdings make overlap and look-through figures lower bounds, while
+risk and behavior metrics are labeled as close-price returns.
 
 ## Authentication & privacy
 

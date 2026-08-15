@@ -13,6 +13,10 @@ export interface Stock {
   cik?: string | null;
   primaryTicker: string | null;
   quoteType: string | null;
+  expenseRatio?: number | null;
+  distributionPolicy?: string | null;
+  indexKey?: string | null;
+  fundIsin?: string | null;
 }
 
 export async function safe<T>(p: Promise<T>): Promise<T | null> {

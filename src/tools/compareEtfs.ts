@@ -1,0 +1,203 @@
+import { z } from "zod";
+import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { bullrunGet } from "../bullrun.js";
+import { requirePublicScope } from "../auth/scopes.js";
+import { safe } from "./stockIdentity.js";
+import { calculatePriceRisk, pricesAscending, roundMetric } from "./etfAnalytics.js";
+import {
+  findExactEtf,
+  fractionToPct,
+  toolResult,
+  type EtfHolding,
+  type EtfPrice,
+  type EtfProfile,
+} from "./etfData.js";
+
+const comparisonModule = z.enum([
+  "classification", "market", "fund_data", "costs", "income", "benchmark", "performance", "risk", "holdings",
+]);
+
+const inputSchema = {
+  tickers: z.array(z.string().min(1)).min(2).max(10)
+    .describe("Two to ten exact Bullrun ETF listing tickers."),
+  include: z.array(comparisonModule).min(1).max(9)
+    .default(["classification", "market", "fund_data", "costs", "income", "benchmark"]),
+  performanceDays: z.number().int().min(30).max(1825).default(370),
+};
+
+const outputSchema = {
+  tickers: z.array(z.string()),
+  requestedModules: z.array(comparisonModule),
+  rows: z.array(z.record(z.string(), z.unknown())),
+  leaders: z.record(z.string(), z.unknown()),
+  relationships: z.record(z.string(), z.unknown()),
+  coverage: z.array(z.record(z.string(), z.unknown())),
+  warnings: z.array(z.string()),
+};
+
+function leader(
+  rows: Array<Record<string, unknown>>,
+  field: string,
+  direction: "min" | "max",
+): Record<string, unknown> | null {
+  const usable = rows.filter((row) => typeof row[field] === "number");
+  if (!usable.length) return null;
+  const sorted = [...usable].sort((a, b) => direction === "min"
+    ? Number(a[field]) - Number(b[field])
+    : Number(b[field]) - Number(a[field]));
+  return { ticker: sorted[0].ticker, value: sorted[0][field], field };
+}
+
+export function registerCompareEtfs(server: McpServer): void {
+  server.registerTool(
+    "compare_etfs",
+    {
+      title: "Compare ETFs",
+      annotations: { readOnlyHint: true },
+      description:
+        "Return a normalized side-by-side comparison of two to ten ETFs across selected classification, market, fund-data, cost, income, benchmark, price-performance, price-risk, and holdings modules. Leaders are mechanical extrema, not recommendations. Currency and partial-holdings caveats are explicit. Read-only.",
+      inputSchema,
+      outputSchema,
+    },
+    async (args) => {
+      try {
+        requirePublicScope("read:market");
+        const tickers = [...new Set(args.tickers.map((ticker) => ticker.trim().toUpperCase()))];
+        if (tickers.length < 2) throw new Error("At least two distinct ETF tickers are required.");
+        const include = [...new Set(args.include)];
+        const needsPrices = include.some((module) => ["market", "performance", "risk"].includes(module));
+        const needsHoldings = include.includes("holdings");
+        const limit = Math.min(1300, Math.max(2, Math.ceil(args.performanceDays * 0.75) + 15));
+        const startDate = new Date(Date.now() - args.performanceDays * 86_400_000).toISOString().slice(0, 10);
+
+        const bundles = await Promise.all(tickers.map(async (ticker) => {
+          const enc = encodeURIComponent(ticker);
+          const [identity, profile, priceResult, holdingResult] = await Promise.all([
+            findExactEtf(ticker),
+            safe(bullrunGet<EtfProfile>(`/api/etfs/${enc}/profile`)),
+            needsPrices ? safe(bullrunGet<EtfPrice[]>(`/api/prices/${enc}`, { limit })) : Promise.resolve(null),
+            needsHoldings ? safe(bullrunGet<EtfHolding[]>(`/api/etfs/${enc}/holdings`)) : Promise.resolve(null),
+          ]);
+          return { ticker, identity, profile, prices: pricesAscending(priceResult, startDate), holdings: holdingResult ?? [] };
+        }));
+
+        const rows = bundles.map(({ ticker, identity, profile, prices, holdings }) => {
+          const row: Record<string, unknown> = {
+            ticker,
+            name: profile?.fundName ?? identity?.company ?? null,
+            fundIsin: profile?.fundIsin ?? identity?.fundIsin ?? null,
+            productType: profile?.productType ?? null,
+            indexKey: profile?.indexKey ?? identity?.indexKey ?? null,
+          };
+          if (include.includes("classification")) Object.assign(row, {
+            category: profile?.category ?? identity?.sector ?? null,
+            focus: profile?.assetClass ?? identity?.industry ?? null,
+            region: profile?.region ?? null,
+            domicile: profile?.domicile ?? identity?.country ?? null,
+          });
+          if (include.includes("market")) Object.assign(row, {
+            exchange: identity?.exchange ?? null,
+            tradingCurrency: identity?.currency ?? null,
+            latestPrice: prices.at(-1)?.closePrice ?? null,
+            latestPriceDate: prices.at(-1)?.tradeDate ?? null,
+          });
+          if (include.includes("fund_data")) Object.assign(row, {
+            nav: profile?.nav ?? null,
+            aum: profile?.totalAssets ?? null,
+            aumCurrency: null,
+          });
+          if (include.includes("costs")) row.expenseRatioPct = fractionToPct(profile?.expenseRatio);
+          if (include.includes("income")) Object.assign(row, {
+            yieldTtmPct: fractionToPct(profile?.yieldTtm),
+            distributionPolicy: profile?.distributionPolicy ?? null,
+          });
+          if (include.includes("benchmark")) row.benchmark = profile?.benchmark ?? null;
+          if (include.includes("performance") || include.includes("risk")) {
+            const metrics = calculatePriceRisk(prices);
+            if (include.includes("performance")) Object.assign(row, {
+              priceReturnPct: metrics.priceReturnPct,
+              annualizedPriceReturnPct: metrics.annualizedReturnPct,
+              performanceStartDate: metrics.startDate,
+              performanceEndDate: metrics.endDate,
+            });
+            if (include.includes("risk")) Object.assign(row, {
+              volatilityAnnualizedPct: metrics.volatilityAnnualizedPct,
+              maxDrawdownPct: metrics.maxDrawdownPct,
+              sharpeRatio: metrics.sharpeRatio,
+              riskObservations: metrics.observations,
+            });
+          }
+          if (include.includes("holdings")) {
+            const coveredWeight = holdings.reduce((sum, holding) => sum + (holding.weightPct ?? 0), 0);
+            const reported = profile?.holdingsCount ?? null;
+            Object.assign(row, {
+              storedHoldings: holdings.length,
+              reportedHoldingsCount: reported,
+              holdingsCoveredWeightPct: roundMetric(coveredWeight),
+              holdingsComplete: reported == null ? null : holdings.length >= reported && coveredWeight >= 98,
+            });
+          }
+          return row;
+        });
+
+        const coverage = bundles.map(({ ticker, identity, profile, prices, holdings }) => ({
+          ticker,
+          identityAvailable: identity != null,
+          profileAvailable: profile != null,
+          priceRows: prices.length,
+          holdingRows: holdings.length,
+          sourceUpdatedAt: profile?.sourceUpdatedAt ?? null,
+        }));
+        const warnings = [
+          "Performance and risk use close-price returns, not distribution-adjusted total returns.",
+        ];
+        if (include.includes("fund_data")) warnings.push("AUM and NAV currencies are not stored; cross-currency comparisons are not normalized.");
+        if (include.includes("holdings") && rows.some((row) => row.holdingsComplete !== true)) warnings.push("At least one ETF has partial or unknown holdings coverage.");
+        const geared = rows.filter((row) => row.productType === "ETP_GEARED").map((row) => String(row.ticker));
+        if (geared.length) warnings.push(`Geared products present (${geared.join(", ")}); long-run return and fee comparisons against unleveraged funds are not like-for-like.`);
+
+        const sameFundListings = new Map<string, string[]>();
+        for (const row of rows) {
+          if (typeof row.fundIsin !== "string" || !row.fundIsin) continue;
+          const group = sameFundListings.get(row.fundIsin) ?? [];
+          group.push(String(row.ticker));
+          sameFundListings.set(row.fundIsin, group);
+        }
+        const duplicateFundGroups = [...sameFundListings.entries()]
+          .filter(([, group]) => group.length > 1)
+          .map(([fundIsin, listings]) => ({ fundIsin, listings }));
+        const sameIndexGroups = new Map<string, string[]>();
+        for (const row of rows) {
+          if (typeof row.indexKey !== "string" || !row.indexKey) continue;
+          const group = sameIndexGroups.get(row.indexKey) ?? [];
+          group.push(String(row.ticker));
+          sameIndexGroups.set(row.indexKey, group);
+        }
+
+        return toolResult({
+          tickers,
+          requestedModules: include,
+          rows,
+          leaders: {
+            lowestExpenseRatio: leader(rows, "expenseRatioPct", "min"),
+            highestAum: leader(rows, "aum", "max"),
+            highestYield: leader(rows, "yieldTtmPct", "max"),
+            highestPriceReturn: leader(rows, "priceReturnPct", "max"),
+            lowestVolatility: leader(rows, "volatilityAnnualizedPct", "min"),
+          },
+          relationships: {
+            duplicateFundGroups,
+            sharedIndexGroups: [...sameIndexGroups.entries()]
+              .filter(([, group]) => group.length > 1)
+              .map(([indexKey, listings]) => ({ indexKey, listings })),
+          },
+          coverage,
+          warnings,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { isError: true, content: [{ type: "text", text: `compare_etfs failed: ${msg}` }] };
+      }
+    },
+  );
+}

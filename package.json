@@ -1,6 +1,6 @@
 {
   "name": "bullrun-mcp",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "description": "Remote MCP server exposing Bullrun market-data + portfolio tools over Streamable HTTP; an OAuth 2.1 protected resource (RFC 9728) with per-user token forwarding and an authless toggle.",
@@ -14,10 +14,11 @@
     "stdio": "node dist/stdio.js",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node scripts/test-auth.mjs && node scripts/test-e2e.mjs && node scripts/test-authless.mjs",
+    "test": "npm run build && node scripts/test-auth.mjs && node scripts/test-e2e.mjs && node scripts/test-authless.mjs && node scripts/test-stdio.mjs",
     "test:auth": "node scripts/test-auth.mjs",
     "test:e2e": "node scripts/test-e2e.mjs",
     "test:authless": "node scripts/test-authless.mjs",
+    "test:stdio": "node scripts/test-stdio.mjs",
     "inspector": "npx -y @modelcontextprotocol/inspector"
   },
   "dependencies": {

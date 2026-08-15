@@ -22,7 +22,9 @@ Bullrun account. Public market-data tools work for any connected user.
   financials and a description for one ticker (`get_stock_metrics`), or 1–15 years of history
   (`get_financial_history`), quality/moat & capital-allocation metrics (`get_quality_moat_metrics`),
   forward estimates, operating KPIs, revenue breakdowns and earnings-call transcripts.
-- **Search ETFs** — by ticker, fund name, category, focus, domicile (`query_etfs`).
+- **Research ETFs** — screen funds, request modular snapshots, inspect holdings/exposures/risk,
+  compare funds and overlap, analyze portfolio fit, and simulate costs. `query_etfs` remains as a
+  compatibility tool for older clients.
 - **Analyze your real holdings** — list your portfolios, get a deep per-portfolio snapshot and
   risk/factor analytics (`list_portfolios`, `get_portfolio_context`, `get_portfolio_analytics`).
   *Requires sign-in.*
