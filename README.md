@@ -1,7 +1,7 @@
 # Bullrun MCP
 
 A hosted **remote [MCP](https://modelcontextprotocol.io) server** that turns Claude (and other
-MCP clients) into a stock-research analyst over global market data and your own portfolios.
+MCP clients) into a research analyst over global stocks, ETFs and your own portfolios.
 
 | | |
 |---|---|
@@ -39,6 +39,8 @@ Full setup for **Cursor, VS Code, and the MCP Inspector** is in
 Public market-data tools work for any connected client. The portfolio tools resolve **your own**
 Bullrun account after Google sign-in; the two draft tools require a Bullrun Pro account.
 
+### Stocks
+
 | Tool | What it does |
 |---|---|
 | `screen_stocks` | Screen the global universe by sector / industry / country / market cap; sort by P/E, dividend yield, revenue or revenue growth. |
@@ -49,10 +51,40 @@ Bullrun account after Google sign-in; the two draft tools require a Bullrun Pro 
 | `get_operating_kpis` | Domain KPIs — ARR, net revenue retention, RPO, billings, customer counts, payment & cross-border volume. |
 | `get_revenue_breakdown` | Segment, geography, product or customer revenue splits. |
 | `get_earnings_call_transcript` | Speaker-tagged earnings-call transcript chunks, fiscal-period filters and text search. |
-| `query_etfs` | Search ETFs by ticker / fund name, category, focus, domicile; profile, price history and holdings for an exact ticker. |
+
+### ETFs and funds
+
+Built for the way European investors actually shop for funds: by ISIN, by tracked index, and by
+total cost — with venue duplicates collapsed so one fund listed on six exchanges reads as one
+choice rather than six.
+
+| Tool | What it does |
+|---|---|
+| `screen_etfs` | Screen the **whole** fund universe by expense ratio, AUM, yield, trailing returns, volatility, liquidity, top-10 concentration and fund age, combined with issuer, index, domicile, UCITS status, distribution policy and currency hedging — plus look-through (`holdingSearch`) to find funds *by what they hold*. |
+| `get_etf_index_group` | "Cheapest way to track the S&P 500 / MSCI World?" — every fund on one index, cheapest first, one row per **fund** with its venues, and an explicit count of funds that publish no fee. |
+| `get_etf_fund` | Resolve an ISIN (or any venue ticker) to the fund and every exchange it trades on. |
+| `get_etf_filter_options` | The exact values the categorical filters accept, so a screen never silently returns nothing on a guessed string. |
+| `search_etfs` | Look up a known fund by name, ticker or ISIN, with classification, index, cost and yield filters. |
+| `get_etf_snapshot` | Modular snapshot for one listing — identity, classification, market, NAV/AUM, costs, income, benchmark. |
+| `get_etf_holdings` | Paginated constituents with an explicit partial-coverage contract. |
+| `get_etf_exposures` | Holdings look-through to sector / country / issuer exposure. |
+| `get_etf_timeseries` | Price history, with unavailable NAV / total-return / premium-discount series named rather than synthesized. |
+| `get_etf_risk` | Volatility, drawdown, Sharpe/Sortino/Calmar, VaR, and benchmark-relative beta and tracking error. |
+| `compare_etfs` | Side-by-side cost, performance, risk and holdings comparison. |
+| `analyze_etf_overlap` | Shared holdings and a weighted lower-bound overlap between funds. |
+| `simulate_etf_cost` | Deterministic multi-year cost scenario from expense ratio, spread, commission and contributions. |
+| `analyze_portfolio_fit` | How a candidate fund would fit your existing portfolio. *(sign-in)* |
+| `query_etfs` | Original ETF search. Retained for compatibility; prefer `screen_etfs` or `search_etfs`. |
+
+### Your portfolios
+
+| Tool | What it does |
+|---|---|
+| `get_capabilities` | Which account is connected, whether Pro is active, granted scopes, and which tools are gated. |
 | `list_portfolios` | Your virtual portfolios with value, day change, cost basis and total return. *(sign-in)* |
 | `get_portfolio_context` | Deep snapshot of one portfolio: every holding with weight, sector and return, plus Bullrun's insights. *(sign-in)* |
 | `get_portfolio_analytics` | Correlation/covariance, contribution-to-risk, factor exposure, sector/currency/country concentration, stress scenarios, and candidate-fit analysis. *(sign-in)* |
+| `create_portfolio_from_positions` | Save a portfolio you have **already** decided, from an explicit `{ticker, weight}` basket used verbatim. *(sign-in, no Pro needed)* |
 | `create_portfolio_draft` | Draft a new paper portfolio from a plain-English brief. **Draft-only** — saved for review, never changes a live position. *(Pro)* |
 | `create_position_draft` | Suggest additions to an existing portfolio. **Draft-only** — saved for review. *(Pro)* |
 

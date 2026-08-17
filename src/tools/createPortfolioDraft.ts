@@ -13,6 +13,7 @@ interface AiDraftPosition {
   company: string | null;
   sector: string | null;
   country: string | null;
+  instrumentType?: string | null;
   weightPct: number;
   allocationUsd: number;
   quantity: number;
@@ -108,7 +109,7 @@ export function registerCreatePortfolioDraft(server: McpServer): void {
       title: "Create a portfolio draft",
       annotations: { readOnlyHint: false, destructiveHint: false },
       description:
-        "Use when the user wants you to BUILD or PROPOSE a brand-new portfolio for them — e.g. \"build me a portfolio\", \"put together a dividend portfolio\", \"draft a portfolio of AI stocks\", \"create a new portfolio for $10k\". Generates a REVIEWABLE paper-portfolio draft for the signed-in Bullrun user from a natural-language brief (e.g. \"a diversified European dividend portfolio\"). Requires OAuth with the write:drafts scope and a Bullrun Pro account. This is DRAFT-ONLY and never changes any live position: the draft is saved to the user's account and appears in the Bullrun Portfolio tab under \"Pending AI drafts\", where the user reviews it and explicitly accepts it to create a new portfolio (or discards it). To suggest additions to an EXISTING portfolio instead, use create_position_draft. Tickers are chosen only from Bullrun's priced universe. If the brief is vague, first ask ONE quick round of up to three multiple-choice questions (investing style, region focus, and size), each with a default the user can accept with \"just pick for me\", then build; skip any dimension the user already specified and do not interrogate across multiple turns.",
+        "Use when the user wants you to BUILD or PROPOSE a brand-new portfolio for them — e.g. \"build me a portfolio\", \"put together a dividend portfolio\", \"draft a portfolio of AI stocks\", \"create a new portfolio for $10k\". Generates a REVIEWABLE paper-portfolio draft for the signed-in Bullrun user from a natural-language brief (e.g. \"a diversified European dividend portfolio\"). Requires OAuth with the write:drafts scope and a Bullrun Pro account. This is DRAFT-ONLY and never changes any live position: the draft is saved to the user's account and appears in the Bullrun Portfolio tab under \"Pending AI drafts\", where the user reviews it and explicitly accepts it to create a new portfolio (or discards it). To suggest additions to an EXISTING portfolio instead, use create_position_draft. Tickers are chosen only from Bullrun's priced stock/ETF universe; pass instrumentUniverse for stocks only, ETFs only, or a mix. If the brief is vague, first ask ONE quick round of up to three multiple-choice questions (investing style, region focus, and size), each with a default the user can accept with \"just pick for me\", then build; skip any dimension the user already specified and do not interrogate across multiple turns.",
       inputSchema: {
         prompt: z
           .string()
@@ -130,9 +131,13 @@ export function registerCreatePortfolioDraft(server: McpServer): void {
           .max(20)
           .optional()
           .describe("Maximum number of holdings (3-20, default 10)."),
+        instrumentUniverse: z
+          .enum(["stocks", "etfs", "mix"])
+          .optional()
+          .describe("Candidate universe: stocks only, ETFs only, or a mix. Default mix unless the prompt says otherwise."),
       },
     },
-    async ({ prompt, startingCash, maxPositions }) => {
+    async ({ prompt, startingCash, maxPositions, instrumentUniverse }) => {
       try {
         requireUserScope("write:drafts");
 
@@ -165,6 +170,7 @@ export function registerCreatePortfolioDraft(server: McpServer): void {
           prompt: brief,
           startingCash: startingCash ?? null,
           maxPositions: maxPositions ?? null,
+          instrumentUniverse: instrumentUniverse ?? null,
           persist: true,
         });
 
@@ -218,6 +224,7 @@ export function registerCreatePortfolioDraft(server: McpServer): void {
             company: p.company,
             sector: p.sector,
             country: p.country,
+            instrumentType: p.instrumentType ?? null,
             weightPct: p.weightPct,
             rationale: p.rationale,
           })),

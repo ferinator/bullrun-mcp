@@ -6,6 +6,7 @@ import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
 import { createMcpServer } from "./mcpServer.js";
 import { config } from "./bullrun.js";
 import { runWithAuth } from "./auth/context.js";
+import { runWithMcpUsage, type McpUsageContext } from "./usage/context.js";
 import { verifyAccessToken } from "./auth/tokenVerifier.js";
 import { protectedResourceMetadata, wwwAuthenticate, PRM_PATH } from "./auth/protectedResource.js";
 
@@ -22,6 +23,16 @@ app.use(
   }),
 );
 
+/**
+ * The always-authenticated MCP endpoint. `/mcp` itself is governed by MCP_REQUIRE_AUTH (open
+ * in authless/public mode), but this sibling path ALWAYS answers an unauthenticated request
+ * with a 401 challenge — so an OAuth client like a Claude custom connector reliably starts the
+ * sign-in flow even while the server stays anonymous for public MCP directories. Both paths
+ * share this server's resource id / audience (config.publicUrl), so a token minted while
+ * connecting to one validates on the other.
+ */
+const AUTH_MCP_PATH = process.env.MCP_AUTH_PATH ?? "/account/mcp";
+
 app.get("/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
@@ -31,6 +42,9 @@ app.get("/health", (_req: Request, res: Response) => {
       required: config.requireAuth,
       resource: config.publicUrl,
       authorizationServers: [config.authServer],
+      // Always-authenticated endpoint: 401-challenges anonymous callers into OAuth login
+      // even when `required` is false (authless mode).
+      loginEndpoint: AUTH_MCP_PATH,
     },
     uptimeSeconds: Math.round(process.uptime()),
   });
@@ -62,38 +76,46 @@ app.get("/.well-known/glama.json", (_req: Request, res: Response) => {
 });
 
 /**
- * Auth gate for every `/mcp` request (Phase 3 / T3.2). When a bearer token is present it is
+ * Auth gate for `/mcp`-style requests (Phase 3 / T3.2). When a bearer token is present it is
  * validated and the caller is run inside an AsyncLocalStorage context so tools forward it to
- * bullrun-api. Behaviour by mode:
+ * bullrun-api. `alwaysRequire` forces the challenge on a missing token regardless of
+ * MCP_REQUIRE_AUTH (used by the dedicated login path); otherwise behaviour by mode:
  *   - requireAuth (default): a missing OR invalid token -> 401 + WWW-Authenticate (the
  *     discovery trigger that makes an MCP client start the OAuth flow).
  *   - authless (MCP_REQUIRE_AUTH=false): no token -> proceed anonymously; but a token that
  *     IS supplied must still be valid (never silently downgrade a presented credential).
  */
-app.use("/mcp", async (req: Request, res: Response, next: NextFunction) => {
-  const header = req.headers.authorization;
-  const bearer = header?.startsWith("Bearer ") ? header.slice(7).trim() : undefined;
+function authGate(alwaysRequire: boolean) {
+  return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
+    const header = req.headers.authorization;
+    const bearer = header?.startsWith("Bearer ") ? header.slice(7).trim() : undefined;
 
-  if (!bearer) {
-    if (config.requireAuth) {
-      respondChallenge(res);
+    if (!bearer) {
+      if (alwaysRequire || config.requireAuth) {
+        respondChallenge(res);
+        return;
+      }
+      next(); // authless mode — proceed as an anonymous caller
       return;
     }
-    next(); // authless mode — proceed as an anonymous caller
-    return;
-  }
 
-  let auth;
-  try {
-    auth = await verifyAccessToken(bearer);
-  } catch (err) {
-    const description = err instanceof Error ? err.message : "Access token could not be validated.";
-    respondChallenge(res, { code: "invalid_token", description });
-    return;
-  }
-  // Run the rest of the request (transport + tool callbacks) inside the auth context.
-  runWithAuth(auth, () => next());
-});
+    let auth;
+    try {
+      auth = await verifyAccessToken(bearer);
+    } catch (err) {
+      const description = err instanceof Error ? err.message : "Access token could not be validated.";
+      respondChallenge(res, { code: "invalid_token", description });
+      return;
+    }
+    // Run the rest of the request (transport + tool callbacks) inside the auth context.
+    runWithAuth(auth, () => next());
+  };
+}
+// `/mcp`: auth governed by MCP_REQUIRE_AUTH (open in authless mode for public + directory use).
+// `AUTH_MCP_PATH`: always requires a valid token, so an unauthenticated client gets the 401
+// that drives a Claude connector into the OAuth sign-in flow.
+app.use("/mcp", authGate(false));
+app.use(AUTH_MCP_PATH, authGate(true));
 
 /** Emit a 401 with the RFC 9728 challenge pointing at our Protected Resource Metadata. */
 function respondChallenge(res: Response, error?: { code: string; description: string }): void {
@@ -115,7 +137,7 @@ function respondChallenge(res: Response, error?: { code: string; description: st
  */
 const transports: Record<string, StreamableHTTPServerTransport> = {};
 
-app.post("/mcp", async (req: Request, res: Response) => {
+async function handleMcpPost(req: Request, res: Response): Promise<void> {
   const sessionId = req.headers["mcp-session-id"] as string | undefined;
   let transport: StreamableHTTPServerTransport | undefined = sessionId ? transports[sessionId] : undefined;
 
@@ -143,7 +165,7 @@ app.post("/mcp", async (req: Request, res: Response) => {
   }
 
   try {
-    await transport.handleRequest(req, res, req.body);
+    await runWithMcpUsage(mcpUsageFromRequest(req), () => transport.handleRequest(req, res, req.body));
   } catch (err) {
     console.error("Error handling MCP request:", err);
     if (!res.headersSent) {
@@ -154,7 +176,12 @@ app.post("/mcp", async (req: Request, res: Response) => {
       });
     }
   }
-});
+}
+// Bind the shared POST handler to both the public and the login-required paths. The auth
+// context is set per-request by the gate above; session state is keyed by Mcp-Session-Id,
+// not by path, so a session started on either endpoint resolves the same transport.
+app.post("/mcp", handleMcpPost);
+app.post(AUTH_MCP_PATH, handleMcpPost);
 
 // GET (SSE stream) and DELETE (session teardown) both require an existing session.
 async function handleSessionRequest(req: Request, res: Response): Promise<void> {
@@ -168,6 +195,8 @@ async function handleSessionRequest(req: Request, res: Response): Promise<void> 
 }
 app.get("/mcp", handleSessionRequest);
 app.delete("/mcp", handleSessionRequest);
+app.get(AUTH_MCP_PATH, handleSessionRequest);
+app.delete(AUTH_MCP_PATH, handleSessionRequest);
 
 app.listen(config.port, () => {
   console.log(`bullrun-mcp listening on :${config.port} (MCP at /mcp, health at GET /health)`);
@@ -177,4 +206,40 @@ app.listen(config.port, () => {
       ? `OAuth protected resource: ${config.publicUrl} (AS: ${config.authServer}); unauthenticated /mcp -> 401`
       : `Authless mode (MCP_REQUIRE_AUTH=false): /mcp open; tokens still validated if presented`,
   );
+  console.log(`Login-required endpoint at ${AUTH_MCP_PATH} -> always 401-challenges anonymous callers into OAuth login`);
 });
+
+function mcpUsageFromRequest(req: Request): McpUsageContext | undefined {
+  const sessionId = firstHeader(req.headers["mcp-session-id"]);
+  const messages = Array.isArray(req.body) ? req.body : [req.body];
+  const methods = new Set<string>();
+  const tools = new Set<string>();
+
+  for (const message of messages) {
+    if (!isRecord(message)) continue;
+    const method = typeof message.method === "string" ? message.method : undefined;
+    if (method) methods.add(method);
+    if (method === "tools/call" && isRecord(message.params)) {
+      const name = message.params.name;
+      if (typeof name === "string" && name) tools.add(name);
+    }
+  }
+
+  const operation = methods.size === 0 ? undefined : methods.size === 1 ? firstSetValue(methods) : "batch";
+  const toolName = tools.size === 0 ? undefined : tools.size === 1 ? firstSetValue(tools) : "batch";
+  if (!sessionId && !operation && !toolName) return undefined;
+  return { sessionId, operation, toolName };
+}
+
+function firstHeader(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value;
+}
+
+function firstSetValue(values: Set<string>): string | undefined {
+  for (const value of values) return value;
+  return undefined;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}

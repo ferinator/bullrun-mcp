@@ -3,6 +3,14 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunPost } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
 
+/**
+ * The whole-universe screener rule engine is the heaviest upstream call (it evaluates rules
+ * across the entire universe and can take tens of seconds on a broad/cold query), so it uses
+ * a longer timeout than the default single-ticker read to avoid spurious client-side aborts
+ * (which would surface as "operation aborted due to timeout" and still burn API quota).
+ */
+const SCREENER_TIMEOUT_MS = 45_000;
+
 /** Shape of one row from POST /api/screener/filter (ScreenerResult DTO).
  *  Series are newest-first; index 0 is the most recent period. */
 interface ScreenerResult {
@@ -257,7 +265,7 @@ export function registerScreenStocks(server: McpServer): void {
           order: args.order ?? "desc",
         });
 
-        const rows = await bullrunPost<ScreenerResult[]>(`/api/screener/filter?${params}`, filter);
+        const rows = await bullrunPost<ScreenerResult[]>(`/api/screener/filter?${params}`, filter, SCREENER_TIMEOUT_MS);
 
         const results: ProjectedRow[] = rows.map((r) => ({
           ticker: r.ticker,

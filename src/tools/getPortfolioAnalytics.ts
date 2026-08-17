@@ -101,7 +101,7 @@ export function registerGetPortfolioAnalytics(server: McpServer): void {
           .string()
           .min(1)
           .optional()
-          .describe("Optional exact Bullrun ticker to test as a candidate diversifier, e.g. AAPL, NESN.SW, BMW.DE."),
+          .describe("Optional exact Bullrun ticker to test as a candidate diversifier - the native local-exchange symbol, e.g. AAPL, BMW, ABBN, NESN (not Yahoo-style suffixes like BMW.DE)."),
         candidateWeightPct: z
           .number()
           .min(0)

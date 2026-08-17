@@ -17,17 +17,26 @@ jobs:
         run: |
           python - <<'PY'
           import json
+          import re
           from pathlib import Path
           from urllib.parse import urlparse
 
           root = Path(".")
           server = json.loads((root / "server.json").read_text())
           glama = json.loads((root / "glama.json").read_text())
+          package = json.loads((root / "package.json").read_text())
 
           assert server["name"] == "org.bull-run/bullrun"
           assert server["title"] == "Bullrun"
-          assert server["version"] == "0.1.2"
           assert server["repository"]["url"] == "https://github.com/ferinator/bullrun-mcp"
+
+          # Pinning a literal version made every release edit this file. What actually
+          # matters is that the registry artifact and the package never drift apart,
+          # since the registry publishes server.json while consumers build package.json.
+          assert re.fullmatch(r"\d+\.\d+\.\d+", server["version"]), server["version"]
+          assert server["version"] == package["version"], (
+              f'server.json {server["version"]} != package.json {package["version"]}'
+          )
 
           remote_urls = [remote["url"] for remote in server.get("remotes", [])]
           assert "https://mcp.bull-run.org/mcp" in remote_urls
@@ -40,3 +49,19 @@ jobs:
             assert parsed.scheme == "https", url
             assert parsed.netloc, url
           PY
+
+  build:
+    # The stdio build is why this repo carries source at all (directory and security
+    # checks compile and run it), so a type error here has to fail the push.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run build
+      - name: Assert the stdio entrypoint was emitted
+        run: test -f dist/stdio.js

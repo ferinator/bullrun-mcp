@@ -8,6 +8,7 @@ interface AiDraftPosition {
   company: string | null;
   sector: string | null;
   country: string | null;
+  instrumentType?: string | null;
   weightPct: number;
   allocationUsd: number;
   quantity: number;
@@ -55,7 +56,7 @@ export function registerCreatePositionDraft(server: McpServer): void {
       title: "Create a position draft",
       annotations: { readOnlyHint: false, destructiveHint: false },
       description:
-        "Use when the user asks what to BUY or ADD to an EXISTING portfolio — e.g. \"what should I buy next\", \"suggest a stock for my portfolio\", \"what should I add\", \"recommend a position\", \"any ideas to round out my holdings\". Generates REVIEWABLE suggested additions for one existing Bullrun portfolio. Requires OAuth with the write:drafts scope and a Bullrun Pro account. This is DRAFT-ONLY: the suggested position(s) are saved to the user's account and appear in the Bullrun Portfolio tab under Pending AI drafts, where the user reviews and accepts them into the target portfolio or discards them. It never changes live holdings by itself. To draft a whole new portfolio from scratch use create_portfolio_draft; to test whether a specific named ticker fits, use get_portfolio_analytics with candidateTicker. If it is unclear, first confirm which portfolio (use list_portfolios when the user has more than one) and how many ideas (a single best idea or a few) in ONE quick step; otherwise just build.",
+        "Use when the user asks what to BUY or ADD to an EXISTING portfolio — e.g. \"what should I buy next\", \"suggest a stock or ETF for my portfolio\", \"what should I add\", \"recommend a position\", \"any ideas to round out my holdings\". Generates REVIEWABLE suggested additions for one existing Bullrun portfolio. Requires OAuth with the write:drafts scope and a Bullrun Pro account. This is DRAFT-ONLY: the suggested position(s) are saved to the user's account and appear in the Bullrun Portfolio tab under Pending AI drafts, where the user reviews and accepts them into the target portfolio or discards them. It never changes live holdings by itself. To draft a whole new portfolio from scratch use create_portfolio_draft; to test whether a specific named ticker fits, use get_portfolio_analytics with candidateTicker. Pass instrumentUniverse for stocks only, ETFs only, or a mix. If it is unclear, first confirm which portfolio (use list_portfolios when the user has more than one) and how many ideas (a single best idea or a few) in ONE quick step; otherwise just build.",
       inputSchema: {
         portfolioId: z
           .number()
@@ -69,15 +70,19 @@ export function registerCreatePositionDraft(server: McpServer): void {
           .max(5)
           .optional()
           .describe("How many suggested additions to save, 1-5. Use 1 for a single-position idea; default 3."),
+        instrumentUniverse: z
+          .enum(["stocks", "etfs", "mix"])
+          .optional()
+          .describe("Candidate universe: stocks only, ETFs only, or a mix. Default mix."),
       },
     },
-    async ({ portfolioId, maxPositions }) => {
+    async ({ portfolioId, maxPositions, instrumentUniverse }) => {
       try {
         requireUserScope("write:drafts");
 
         const created = await bullrunPost<PositionDraftCreated>(
           `/api/portfolios/${encodeURIComponent(portfolioId)}/position-drafts`,
-          { maxPositions: maxPositions ?? null },
+          { maxPositions: maxPositions ?? null, instrumentUniverse: instrumentUniverse ?? null },
         );
 
         if (created.status === "empty" || !created.draft || created.draftId == null) {
@@ -110,6 +115,7 @@ export function registerCreatePositionDraft(server: McpServer): void {
             company: p.company,
             sector: p.sector,
             country: p.country,
+            instrumentType: p.instrumentType ?? null,
             quantity: p.quantity,
             avgPrice: p.avgPrice,
             currency: p.currency,

@@ -282,7 +282,7 @@ function sourceCurrencies(rows: HistoryRow[]): string[] {
 
 const inputSchema = {
   ticker: z.string().min(1)
-    .describe("The ticker exactly as listed on Bullrun, e.g. \"AAPL\", \"ABBN.SW\", \"BMW.DE\"."),
+    .describe("The ticker exactly as listed on Bullrun - the native local-exchange symbol, e.g. \"AAPL\", \"BMW\" (not \"BMW.DE\"), \"ABBN\" (not \"ABBN.SW\"), \"NESN\", or a numeric code like \"005930\". Do not append Yahoo-style country suffixes; if a lookup returns nothing, use screen_stocks to find the exact symbol."),
   periodType: z.enum(["annual", "quarterly", "both"]).default("both")
     .describe("Return annual rows, quarterly rows, or both. Annual rows use fiscalQuarter=0."),
   years: z.number().int().min(1).max(15).default(10)

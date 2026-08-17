@@ -3,7 +3,7 @@
   "name": "org.bull-run/bullrun",
   "title": "Bullrun",
   "description": "Global stock research, ML forecasts, valuation signals, screeners & portfolio tracking in Claude",
-  "version": "0.1.2",
+  "version": "0.3.0",
   "repository": {
     "url": "https://github.com/ferinator/bullrun-mcp",
     "source": "github"

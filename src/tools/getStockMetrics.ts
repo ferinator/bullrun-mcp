@@ -70,10 +70,10 @@ export function registerGetStockMetrics(server: McpServer): void {
       title: "Get stock metrics",
       annotations: { readOnlyHint: true },
       description:
-        "Fetch a consolidated metrics snapshot for a single stock by ticker: identity (company, exchange, currency, sector, industry, country, ISIN), latest daily price (OHLCV), latest valuation (market cap, P/E, dividend yield, annual dividend per share), the most recent reported financials (revenue, gross/operating income, EBITDA, net income, diluted EPS, free & operating cash flow, total debt, cash, total assets, equity) and a short company description. Use the exact ticker as listed on Bullrun (Yahoo-style suffixes, e.g. AAPL, ABBN.SW, BMW.DE). Read-only.",
+        "Fetch a consolidated metrics snapshot for a single stock by ticker: identity (company, exchange, currency, sector, industry, country, ISIN), latest daily price (OHLCV), latest valuation (market cap, P/E, dividend yield, annual dividend per share), the most recent reported financials (revenue, gross/operating income, EBITDA, net income, diluted EPS, free & operating cash flow, total debt, cash, total assets, equity) and a short company description. Use the exact ticker as listed on Bullrun - the native local-exchange symbol (e.g. AAPL, BMW, ABBN, NESN, or a numeric code like 005930), NOT Yahoo-style country suffixes like BMW.DE or ABBN.SW. If a ticker returns no data, use screen_stocks (by sector/country) to find the exact symbol. Read-only.",
       inputSchema: {
         ticker: z.string().min(1)
-          .describe("The stock ticker exactly as listed on Bullrun, e.g. \"AAPL\", \"ABBN.SW\", \"BMW.DE\"."),
+          .describe("The stock ticker exactly as listed on Bullrun - the native local-exchange symbol, e.g. \"AAPL\", \"BMW\" (not \"BMW.DE\"), \"ABBN\" (not \"ABBN.SW\"), \"NESN\", or a numeric code like \"005930\". Do not append Yahoo-style country suffixes."),
       },
     },
     async (args) => {
@@ -101,7 +101,7 @@ export function registerGetStockMetrics(server: McpServer): void {
           return {
             content: [{
               type: "text",
-              text: `No data found for ticker "${ticker}". Check the exact symbol (Bullrun uses Yahoo-style suffixes, e.g. BMW.DE, ABBN.SW).`,
+              text: `No data found for ticker "${ticker}". Bullrun uses the plain local-exchange symbol, not Yahoo-style suffixes - e.g. "BMW" not "BMW.DE", "ABBN" not "ABBN.SW". Drop any .XX suffix and retry, or use screen_stocks (by sector/country) to find the exact symbol.`,
             }],
           };
         }

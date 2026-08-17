@@ -36,9 +36,13 @@ export function registerPrompts(server: McpServer): void {
           .string()
           .optional()
           .describe("Approximate size, e.g. $10k, $25k, $50k, or a number of holdings."),
+        universe: z
+          .string()
+          .optional()
+          .describe("Instrument universe: stocks, ETFs, or mix."),
       },
     },
-    ({ style, region, size }) => ({
+    ({ style, region, size, universe }) => ({
       messages: [
         {
           role: "user",
@@ -49,6 +53,7 @@ export function registerPrompts(server: McpServer): void {
               line("Style", style) +
               line("Region", region) +
               line("Size", size) +
+              line("Universe", universe) +
               '\n\nHelp me create it. If any of style, region, or size is missing, ask me in ONE quick round of at most three multiple-choice questions — each with a sensible default I can accept by saying "just pick for me" — then call create_portfolio_draft to generate a reviewable draft. Do not interrogate me across multiple turns. This only creates a draft I review in the Portfolio tab; it never changes my live holdings.',
           },
         },
@@ -71,9 +76,13 @@ export function registerPrompts(server: McpServer): void {
           .string()
           .optional()
           .describe("How many ideas to propose, e.g. 1 for a single best idea or 3 for a few."),
+        universe: z
+          .string()
+          .optional()
+          .describe("Instrument universe: stocks, ETFs, or mix."),
       },
     },
-    ({ portfolio, count }) => ({
+    ({ portfolio, count, universe }) => ({
       messages: [
         {
           role: "user",
@@ -83,6 +92,7 @@ export function registerPrompts(server: McpServer): void {
               "Suggest positions to add to one of my existing Bullrun portfolios." +
               line("Portfolio", portfolio) +
               line("How many ideas", count) +
+              line("Universe", universe) +
               "\n\nIf you do not know which portfolio, call list_portfolios first and ask me to pick (and how many ideas — one best idea or a few) in ONE quick step, then call create_position_draft. This saves a reviewable draft only; it never changes my live holdings.",
           },
         },

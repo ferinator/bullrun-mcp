@@ -6,8 +6,9 @@
  * public endpoints simply ignore it. There is no caching.
  */
 import { getAuth } from "./auth/context.js";
+import { getMcpUsage } from "./usage/context.js";
 
-const DEFAULT_BASE = "https://bull-run.org";
+const DEFAULT_BASE = "http://localhost:8085";
 const DEFAULT_AUTH_SERVER = "https://bull-run.org";
 const DEFAULT_PUBLIC_URL = "https://mcp.bull-run.org";
 const DEFAULT_SCOPES = "read:market read:portfolios write:drafts";
@@ -68,6 +69,7 @@ export async function bullrunGet<T>(path: string, params?: QueryParams): Promise
   if (auth?.token) {
     headers.Authorization = `Bearer ${auth.token}`;
   }
+  addMcpUsageHeaders(headers);
 
   let res: Response;
   try {
@@ -95,7 +97,7 @@ export async function bullrunGet<T>(path: string, params?: QueryParams): Promise
  * and throws a descriptive Error on transport failure or non-2xx response. Used by the
  * write tools (e.g. starting an AI portfolio draft job).
  */
-export async function bullrunPost<T>(path: string, body?: unknown): Promise<T> {
+export async function bullrunPost<T>(path: string, body?: unknown, timeoutMs?: number): Promise<T> {
   const url = new URL(path.startsWith("/") ? path : `/${path}`, config.apiBase);
 
   const headers: Record<string, string> = {
@@ -107,6 +109,7 @@ export async function bullrunPost<T>(path: string, body?: unknown): Promise<T> {
   if (auth?.token) {
     headers.Authorization = `Bearer ${auth.token}`;
   }
+  addMcpUsageHeaders(headers);
 
   let res: Response;
   try {
@@ -114,7 +117,7 @@ export async function bullrunPost<T>(path: string, body?: unknown): Promise<T> {
       method: "POST",
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(config.requestTimeoutMs),
+      signal: AbortSignal.timeout(timeoutMs ?? config.requestTimeoutMs),
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
@@ -128,4 +131,14 @@ export async function bullrunPost<T>(path: string, body?: unknown): Promise<T> {
   }
 
   return (await res.json()) as T;
+}
+
+function addMcpUsageHeaders(headers: Record<string, string>): void {
+  const usage = getMcpUsage();
+  if (usage?.sessionId) {
+    headers["X-Bullrun-Mcp-Session"] = usage.sessionId;
+  }
+  if (usage?.toolName) {
+    headers["X-Bullrun-Mcp-Tool"] = usage.toolName;
+  }
 }

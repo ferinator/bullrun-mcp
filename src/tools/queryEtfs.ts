@@ -117,9 +117,9 @@ const inputSchema = {
   ticker: z.string().optional()
     .describe("Exact ETF ticker for profile, prices, and optional holdings, e.g. SPY, VWRL.L, EUNL.DE."),
   category: z.string().optional()
-    .describe("Exact ETF category filter. This maps to Bullrun's ETF category column."),
+    .describe("Exact broad ETF asset-class filter, such as Equity, Fixed Income, Commodity, Crypto, or Real Estate. Kept as category for API compatibility."),
   focus: z.string().optional()
-    .describe("Exact ETF focus filter. This maps to Bullrun's ETF focus / asset-class column."),
+    .describe("Exact ETF exposure filter, such as Japan, Equity - Australia, TOPIX, or an exchange/source exposure label. Kept as focus for API compatibility."),
   domicile: z.string().optional()
     .describe("Exact ETF domicile filter."),
   exchange: z.string().optional()
@@ -147,7 +147,7 @@ export function registerQueryEtfs(server: McpServer): void {
       title: "Query ETFs",
       annotations: { readOnlyHint: true },
       description:
-        "Search the Bullrun ETF universe by ticker/fund name plus ETF category, focus, domicile, exchange and currency. For an exact ticker, returns ETF profile details, recent historical price rows, and latest holdings. Read-only.",
+        "Compatibility tool for older clients: search the Bullrun ETF universe and optionally bundle profile, recent prices, and latest holdings for an exact ticker. New clients should use search_etfs, get_etf_snapshot, and get_etf_holdings for smaller responses, structured output, quantitative filters, and explicit coverage metadata. Read-only.",
       inputSchema,
     },
     async (args) => {
