@@ -22,6 +22,21 @@ Bullrun account. Public market-data tools work for any connected user.
   financials and a description for one ticker (`get_stock_metrics`), or 1–15 years of history
   (`get_financial_history`), quality/moat & capital-allocation metrics (`get_quality_moat_metrics`),
   forward estimates, operating KPIs, revenue breakdowns and earnings-call transcripts.
+- **Read Bullrun's valuation model** — the gap between the P/E (or price/sales) a stock's
+  fundamentals typically command and what it trades at, the implied model-typical P/E, and a
+  relative 1-year forecast signal, for any ticker (`get_valuation_model`) or ranked across the
+  universe from either end (`screen_valuation_model`).
+- **Assess company risk and relationships** — a 0-100 composite risk score and six mechanism
+  dials (market expectation, operating pressure, cash conversion, leverage, competitive
+  position, concentration), filing risk factors and supplier concentration
+  (`get_company_risk`); named competitors, suppliers, customers and partners with verified
+  evidence and quantified dependence (`get_company_relationships`); the universe ranked by any
+  dial (`screen_risk_board`) and this week's band changes (`get_risk_movers`).
+- **Follow global markets and macro** — indices, policy rates, 10Y yields, FX, commodities, the
+  economic calendar and news in one call (`get_global_markets_overview`); a country's macro
+  stress score and its inputs (`get_country_macro`); countries ranked on GDP growth, inflation,
+  debt, unemployment, housing, credit or confidence (`get_macro_indicators`); and decades of
+  history for any of those series (`get_macro_history`).
 - **Research ETFs and UCITS funds** — screen the whole fund universe on cost, size, yield,
   returns, volatility, liquidity and concentration, or by what a fund *holds*
   (`screen_etfs`); find the cheapest fund tracking an index with venue duplicates collapsed

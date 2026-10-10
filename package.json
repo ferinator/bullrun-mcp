@@ -1,6 +1,6 @@
 {
   "name": "bullrun-mcp",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "private": true,
   "type": "module",
   "description": "Remote MCP server exposing Bullrun market-data + portfolio tools over Streamable HTTP; an OAuth 2.1 protected resource (RFC 9728) with per-user token forwarding and an authless toggle.",

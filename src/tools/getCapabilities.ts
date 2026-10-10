@@ -36,7 +36,7 @@ export function registerGetCapabilities(server: McpServer): void {
             text: JSON.stringify({
               authenticated: false,
               message:
-                "Not connected to a Bullrun account. Public market-data tools (screen_stocks, search_etfs, get_etf_snapshot, get_etf_holdings, get_stock_metrics, get_financial_history, ...) work without auth; portfolio and draft tools require connecting your Bullrun account via OAuth.",
+                "Not connected to a Bullrun account. Public market-data tools (screen_stocks, search_etfs, get_etf_snapshot, get_etf_holdings, get_stock_metrics, get_financial_history, get_company_risk, get_company_relationships, get_global_markets_overview, get_valuation_model, ...) work without auth; portfolio and draft tools require connecting your Bullrun account via OAuth.",
               scopes: auth?.scopes ?? [],
             }, null, 2),
           }],

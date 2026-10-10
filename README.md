@@ -1,7 +1,8 @@
 # Bullrun MCP
 
 A hosted **remote [MCP](https://modelcontextprotocol.io) server** that turns Claude (and other
-MCP clients) into a research analyst over global stocks, ETFs and your own portfolios.
+MCP clients) into a research analyst over global stocks, ETFs, company risk, the global macro
+backdrop and your own portfolios, with Bullrun's own machine-learning valuation model built in.
 
 | | |
 |---|---|
@@ -52,6 +53,45 @@ Bullrun account after Google sign-in; the two draft tools require a Bullrun Pro 
 | `get_revenue_breakdown` | Segment, geography, product or customer revenue splits. |
 | `get_earnings_call_transcript` | Speaker-tagged earnings-call transcript chunks, fiscal-period filters and text search. |
 
+### Bullrun valuation model
+
+Bullrun's own LightGBM models, rescored every night across the global stock universe. The
+**valuation** model predicts the P/E (or price/sales, for companies without earnings) that
+businesses with similar fundamentals typically trade at a year out; the **gap** is that
+model-typical multiple over the current one, minus one. The **forecast** model is a relative
+1-year return-rank signal. Both run on quarterly and on annual financials, so most non-US
+companies are covered too.
+
+| Tool | What it does |
+|---|---|
+| `get_valuation_model` | For 1-10 tickers: valuation gap, implied model-typical P/E vs current P/E, percentile and rank in the scored universe, and the forecast signal, with data-quality and financials-through date. |
+| `screen_valuation_model` | Rank the universe (market cap ≥ $100M) from either end: furthest below or above the typical multiple, or strongest/weakest forecast, filtered by sector, country and exchange. |
+
+The valuation gap describes how a stock is priced next to fundamentally similar companies. In
+walk-forward tests it has not predicted forward returns, and the tools say so in every response:
+it is context for a decision, not a price target.
+
+### Company risk and relationships
+
+| Tool | What it does |
+|---|---|
+| `get_company_risk` | A 0-100 composite risk score and six mechanism dials (market expectation, operating pressure, cash conversion, leverage & coverage, competitive position, concentration), each with band, direction, driving input and explanation; filing-derived risk factors by severity; identified supplier concentration (share of cost base covered, HHI, sole-source count); recent material events. |
+| `get_company_relationships` | Named competitors, suppliers, customers and partners, each with its ticker when listed, VERIFIED (primary filing/source) or SUGGESTED status, confidence, sole-source flag and quantified dependence where disclosed, e.g. *Cirrus Logic gets 91% of its revenue from Apple*. |
+| `screen_risk_board` | Rank ~9,000 scored companies by the composite or any one dial, filtered by band, sector, country and how many dials are measured, with sector and country averages. |
+| `get_risk_movers` | Companies whose composite crossed into a different band in the last N days, worsening or improving. |
+
+Bands run Contained → Normal → Elevated → Stretched → Acute and describe measured strain, never
+a buy/sell view. A dial with no reading is reported as unmeasured, never as safe.
+
+### Global markets and macro
+
+| Tool | What it does |
+|---|---|
+| `get_global_markets_overview` | One-call briefing: 19 world equity indices (live intraday when open), Fed/ECB/BoE/BoJ/SNB/BoC policy rates and next decisions, 16 sovereign 10Y yields, 20 FX pairs, oil/gas/gold/copper, headline macro tiles (global GDP, inflation, debt, VIX, DXY, 2s10s), the economic calendar, news and the US housing balance. |
+| `get_country_macro` | A country's 0-100 macro stress score across six pillars (labour, housing, credit, fiscal, external, cycle), with every input's value, period and source (OECD, IMF, BIS, World Bank, Eurostat). |
+| `get_macro_indicators` | Rank or compare ~200 countries on GDP growth, inflation, government debt, unemployment, youth unemployment, house prices vs income and rents, the BIS credit gap, household debt, business/consumer confidence or macro stress. |
+| `get_macro_history` | Decades of history for any of those series, by code, by name ("Fed", "Brent", "Germany 10Y", "S&P 500") or by indicator + country, with 1M/3M/1Y/5Y changes and resampled points. |
+
 ### ETFs and funds
 
 Built for the way European investors actually shop for funds: by ISIN, by tracked index, and by
@@ -87,6 +127,22 @@ choice rather than six.
 | `create_portfolio_from_positions` | Save a portfolio you have **already** decided, from an explicit `{ticker, weight}` basket used verbatim. *(sign-in, no Pro needed)* |
 | `create_portfolio_draft` | Draft a new paper portfolio from a plain-English brief. **Draft-only** — saved for review, never changes a live position. *(Pro)* |
 | `create_position_draft` | Suggest additions to an existing portfolio. **Draft-only** — saved for review. *(Pro)* |
+
+### Prompts
+
+Selectable starting points in your client's prompt menu: `stock_deep_dive` (fundamentals,
+valuation model, risk dials and relationships for one ticker), `market_briefing` (markets,
+macro and this week's risk movers), `build_portfolio`, `suggest_positions` and
+`analyze_portfolio`.
+
+### Try asking
+
+- "Is ASML expensive by Bullrun's valuation model, and what are its biggest risks?"
+- "Who are Apple's suppliers, and which of them depend on Apple for most of their revenue?"
+- "Which large US companies have stretched or acute leverage right now?"
+- "Brief me on global markets this morning, with a focus on Europe."
+- "Rank G7 countries by government debt and show me Italy's 10-year yield since 2010."
+- "Find the cheapest German stocks relative to their fundamentals."
 
 ## Authentication & privacy
 

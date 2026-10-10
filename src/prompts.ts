@@ -133,4 +133,63 @@ export function registerPrompts(server: McpServer): void {
       ],
     }),
   );
+
+  server.registerPrompt(
+    "stock_deep_dive",
+    {
+      title: "Stock deep dive",
+      description:
+        "Research one stock end to end with Bullrun's data: fundamentals, the Bullrun valuation model, company risk dials and its supplier/customer/competitor network.",
+      argsSchema: {
+        ticker: z.string().describe("The stock's Bullrun ticker, e.g. AAPL, ASML, NESN."),
+        focus: z
+          .string()
+          .optional()
+          .describe("Optional angle, e.g. valuation, supply-chain risk, balance sheet, or competition."),
+      },
+    },
+    ({ ticker, focus }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text:
+              `Give me a deep dive on ${ticker.trim().toUpperCase()}.` +
+              line("Focus", focus) +
+              "\n\nUse get_stock_metrics and get_financial_history for the business and its numbers, get_valuation_model for Bullrun's valuation gap and forecast signal, get_company_risk for the risk dials, filing risk factors and supplier concentration, and get_company_relationships for who it depends on and competes with. Close with the two or three things that matter most, the main risks, and what would change the picture. Treat the valuation gap and risk bands as context, not a recommendation.",
+          },
+        },
+      ],
+    }),
+  );
+
+  server.registerPrompt(
+    "market_briefing",
+    {
+      title: "Market briefing",
+      description:
+        "A concise briefing on global markets and the macro backdrop from Bullrun's Global Markets data: indices, rates, yields, FX, commodities, the calendar and notable risk moves.",
+      argsSchema: {
+        region: z
+          .string()
+          .optional()
+          .describe("Optional region or country to emphasise, e.g. US, Europe, Japan, or Germany."),
+      },
+    },
+    ({ region }) => ({
+      messages: [
+        {
+          role: "user",
+          content: {
+            type: "text",
+            text:
+              "Brief me on global markets today." +
+              line("Emphasis", region) +
+              "\n\nCall get_global_markets_overview (add the news section), then get_country_macro for the emphasised country if one is named and get_risk_movers for notable company risk changes this week. Keep it short: what moved, where rates and yields stand, what is on the calendar, and one or two macro risks worth watching. Use get_macro_history when a longer trend would help.",
+          },
+        },
+      ],
+    }),
+  );
 }

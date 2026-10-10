@@ -49,9 +49,10 @@ export type QueryParams = Record<string, string | number | boolean | undefined |
  * GET a JSON resource from bullrun-api. Blank/undefined/null query params are dropped so
  * callers can pass optional filters unconditionally. When the request is authenticated,
  * the caller's bearer token is forwarded. Throws a descriptive Error on transport failure
- * or non-2xx response.
+ * or non-2xx response. `timeoutMs` overrides the default upstream timeout for an endpoint
+ * known to be slow.
  */
-export async function bullrunGet<T>(path: string, params?: QueryParams): Promise<T> {
+export async function bullrunGet<T>(path: string, params?: QueryParams, timeoutMs?: number): Promise<T> {
   const url = new URL(path.startsWith("/") ? path : `/${path}`, config.apiBase);
   if (params) {
     for (const [key, value] of Object.entries(params)) {
@@ -75,7 +76,7 @@ export async function bullrunGet<T>(path: string, params?: QueryParams): Promise
   try {
     res = await fetch(url, {
       headers,
-      signal: AbortSignal.timeout(config.requestTimeoutMs),
+      signal: AbortSignal.timeout(timeoutMs ?? config.requestTimeoutMs),
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
