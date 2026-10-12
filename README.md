@@ -144,6 +144,28 @@ macro and this week's risk movers), `build_portfolio`, `suggest_positions` and
 - "Rank G7 countries by government debt and show me Italy's 10-year yield since 2010."
 - "Find the cheapest German stocks relative to their fundamentals."
 
+## Continue your research in Bullrun
+
+Successful research results include a contextual link to the matching page on
+[Bullrun](https://bull-run.org). Explore company charts and networks, adjust a stock
+screen, compare funds, or open a macro chart from the answer you already have.
+
+Stock-screen links preserve normalized filters, reporting windows, listing scope and
+sorting. Risk-board links preserve mechanism, multiple bands, coverage and sorting.
+Link descriptions disclose settings the destination cannot reproduce. Clients receive
+`platformLink` (`label`, `url`, `description`), `webPage`, readable Markdown and an MCP
+`resource_link`; whether the assistant displays a link depends on the client.
+
+Saved portfolio drafts link directly to the exact pending draft. Sign-in preserves
+the destination, and accepting or discarding the draft remains your choice. Opening a
+link never changes holdings.
+
+Links carry fixed campaign labels and the originating tool name, without tokens,
+account identity, portfolio values or free-text briefs. Website activity and completed
+tool invocations are measured separately from upstream API requests. Run `npm test`
+for the connector's URL, telemetry, authentication and integration checks, or
+`npm run test:links` for focused handoff checks.
+
 ## Authentication & privacy
 
 The server is an OAuth 2.0 protected resource (RFC 9728). On first connect your client runs an

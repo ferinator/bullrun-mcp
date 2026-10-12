@@ -142,4 +142,7 @@ function addMcpUsageHeaders(headers: Record<string, string>): void {
   if (usage?.toolName) {
     headers["X-Bullrun-Mcp-Tool"] = usage.toolName;
   }
+  if (usage?.invocationId) {
+    headers["X-Bullrun-Mcp-Invocation"] = usage.invocationId;
+  }
 }

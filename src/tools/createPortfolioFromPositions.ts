@@ -112,7 +112,7 @@ export function registerCreatePortfolioFromPositions(server: McpServer): void {
           saved: true,
           draftId: res.draftId,
           message:
-            'Saved as a pending draft in your Bullrun account. Open the Portfolio tab and review it under "Pending AI drafts" to accept it (creates a new portfolio) or discard it. This created a draft only and did not change any live positions.',
+            'Saved as a pending draft in your Bullrun account. Use the returned review link to open this exact draft and accept it (creates a new portfolio) or discard it. This created a draft only and did not change any live positions.',
           name: draft.name,
           startingCashUsd: draft.startingCash,
           cashPct: draft.cashPct,

@@ -4,6 +4,7 @@ export interface McpUsageContext {
   sessionId?: string;
   operation?: string;
   toolName?: string;
+  invocationId?: string;
 }
 
 const storage = new AsyncLocalStorage<McpUsageContext>();
