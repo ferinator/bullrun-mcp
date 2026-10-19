@@ -4,6 +4,7 @@
  * helpers only compact them for an LLM and keep the band wording next to every score, so a
  * client never renders "Acute" without the clause that bounds what Acute claims.
  */
+import { clipText } from "./textClip.js";
 
 export const RISK_MECHANISMS = [
   "MARKET",
@@ -123,6 +124,9 @@ export interface RiskBoardEntry {
   marketCapUsd: number | null;
 }
 
+/** Longest category explanation in summary detail; some run to ~200 words. */
+const SUMMARY_EXPLANATION_CHARS = 360;
+
 export function round(value: number | null | undefined, digits = 2): number | null {
   if (value == null || !Number.isFinite(value)) return null;
   const f = 10 ** digits;
@@ -169,7 +173,8 @@ export function compactReading(r: RiskReading, withTerms: boolean): Record<strin
           },
         }
       : {}),
-    explanation: r.explanation,
+    // Summary keeps the explanation's opening sentences; "full" detail keeps all of it.
+    explanation: withTerms ? r.explanation : clipText(r.explanation, SUMMARY_EXPLANATION_CHARS),
     ...(withTerms && r.terms?.length ? { terms: r.terms.map(compactTerm) } : {}),
   };
 }

@@ -42,6 +42,14 @@ export interface EtfHolding {
   currency: string | null;
   source?: string | null;
   updatedAt: string | null;
+  /** The security's ISIN, where the provider gave one (ISIN-keyed issuer files, justETF). */
+  holdingIsin?: string | null;
+  /** Provider's country for the security, unnormalised: an ISO code or an English/German name. */
+  holdingCountry?: string | null;
+  /** Provider's sector label, unnormalised (GICS, Morningstar or a bond-sector class). */
+  holdingSector?: string | null;
+  /** Provider's asset class, e.g. Equity, Cash, Futures. */
+  holdingAssetClass?: string | null;
 }
 
 export interface EtfPrice {

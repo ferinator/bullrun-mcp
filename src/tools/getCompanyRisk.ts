@@ -2,7 +2,9 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { findExactStock, identityPayload, safe } from "./stockIdentity.js";
+import { identityPayload, resolveStockTicker, safe, TICKER_CONVENTION, tickerNotFoundText } from "./stockIdentity.js";
+import { clipText } from "./textClip.js";
+import { foldDuplicateEvents } from "./eventFolding.js";
 import { toolResult } from "./etfData.js";
 import {
   BAND_SCALE,
@@ -77,11 +79,8 @@ interface CompanyEvent {
 
 const SEVERITY_RANK: Record<string, number> = { HIGH: 0, MEDIUM: 1, WATCH: 1, LOW: 2, INFO: 3 };
 
-function clip(text: string | null | undefined, max: number): string | null {
-  if (!text) return null;
-  const t = text.trim();
-  return t.length > max ? `${t.slice(0, max)}...` : t;
-}
+const clip = clipText;
+
 
 function bySeverityThenConfidence<T extends { severity: string | null; confidence: number | null }>(a: T, b: T): number {
   const s = (SEVERITY_RANK[a.severity ?? ""] ?? 9) - (SEVERITY_RANK[b.severity ?? ""] ?? 9);
@@ -90,7 +89,7 @@ function bySeverityThenConfidence<T extends { severity: string | null; confidenc
 
 const inputSchema = {
   ticker: z.string().min(1)
-    .describe("Exact Bullrun ticker, native local-exchange symbol (e.g. \"AAPL\", \"ASML\", \"NESN\", \"005930\"); no Yahoo-style suffixes."),
+    .describe("Bullrun ticker, e.g. \"AAPL\", \"ASML\", \"NESN\", \"6324.T\" or \"0700.HK\". " + TICKER_CONVENTION),
   include: z.array(z.enum(MODULES)).min(1).optional()
     .describe("Modules to return. dials = composite + six mechanism dials (market expectation, operating pressure, cash conversion, leverage, competitive position, concentration); risk_factors = filing-derived risk factors (10-K/annual report) with severity and mechanism; supplier_exposure = identified supplier spend concentration; events = recent restructuring/legal/supply/recall events; headline = latest news headline beside the dials. Default: dials, risk_factors, supplier_exposure."),
   detail: z.enum(["summary", "full"]).default("summary")
@@ -114,15 +113,19 @@ export function registerGetCompanyRisk(server: McpServer): void {
     async (args) => {
       try {
         requirePublicScope("read:market");
-        const ticker = args.ticker.trim().toUpperCase();
-        if (!ticker) return { isError: true, content: [{ type: "text", text: "ticker is required" }] };
+        if (!args.ticker.trim()) return { isError: true, content: [{ type: "text", text: "ticker is required" }] };
+        const resolution = await resolveStockTicker(args.ticker);
+        if (!resolution.ticker) {
+          return { content: [{ type: "text", text: tickerNotFoundText(args.ticker, resolution) }] };
+        }
+        const ticker = resolution.ticker;
+        const identity = resolution.stock;
         const enc = encodeURIComponent(ticker);
         const include = new Set<Module>(args.include?.length ? args.include : DEFAULT_MODULES);
         const withTerms = args.detail === "full";
         const base = `/api/company-intelligence/${enc}`;
 
-        const [identity, preview, factors, suppliers, events] = await Promise.all([
-          findExactStock(ticker),
+        const [preview, factors, suppliers, events] = await Promise.all([
           include.has("dials") || include.has("headline")
             ? safe(bullrunGet<RiskPreview>(`${base}/risk-preview`))
             : Promise.resolve(null),
@@ -232,7 +235,9 @@ export function registerGetCompanyRisk(server: McpServer): void {
 
         if (include.has("events")) {
           const rows = [...(events ?? [])].sort(bySeverityThenConfidence);
-          modules.events = rows.slice(0, args.maxEvents).map((e) => ({
+          const stories = foldDuplicateEvents(rows, identity?.company ?? null);
+          const shown = stories.slice(0, args.maxEvents);
+          modules.events = shown.map(({ event: e, alsoReportedAs }) => ({
             type: e.eventType,
             headline: clip(e.headline, 240),
             summary: clip(e.summary, 400),
@@ -241,10 +246,20 @@ export function registerGetCompanyRisk(server: McpServer): void {
             status: e.status,
             confidence: round(e.confidence, 2),
             sourceUrl: e.sourceUrl,
+            ...(alsoReportedAs.length
+              ? { alsoReportedAs: alsoReportedAs.map((r) => ({ headline: clip(r.headline, 160), sourceUrl: r.sourceUrl })) }
+              : {}),
             publishedAt: e.publishedAt,
             discoveredAt: e.discoveredAt,
           }));
           if (!rows.length) warnings.push("No company events are stored for this ticker.");
+          if (stories.length < rows.length) {
+            warnings.push(`${rows.length - stories.length} further report(s) of the same stories by other outlets were folded into one event each; alsoReportedAs lists them with headline and link.`);
+          }
+          const undated = shown.filter(({ event }) => !event.publishedAt).length;
+          if (undated) {
+            warnings.push(`${undated} event(s) have no publication date from their source; discoveredAt is when Bullrun found the article, not when it was published.`);
+          }
         }
 
         // The dials endpoint never 404s (an unknown ticker comes back as six dark dials), so
@@ -252,17 +267,13 @@ export function registerGetCompanyRisk(server: McpServer): void {
         const cluster = preview?.dials ?? null;
         const measured = Boolean(cluster?.composite) || (cluster?.dials ?? []).some((d) => d.score != null)
           || Boolean(factors?.length) || Boolean(suppliers?.suppliers?.length) || Boolean(events?.length);
-        if (!identity && !measured) {
-          return {
-            content: [{
-              type: "text",
-              text: `No risk data found for "${ticker}". Use the plain local-exchange symbol (e.g. "BMW" not "BMW.DE"), or find the exact symbol with screen_stocks.`,
-            }],
-          };
+        if (!measured) {
+          warnings.push(`${ticker} is a Bullrun listing, but no risk dials, filing risk factors, supplier data or events are stored for it yet: its risk is unmeasured, not low.`);
         }
 
         return toolResult({
           ticker,
+          ...(resolution.note ? { tickerResolution: resolution.note } : {}),
           identity: identityPayload(identity),
           requestedModules: [...include],
           methodology: RISK_METHOD_NOTE,

@@ -2,9 +2,9 @@
   "$schema": "https://glama.ai/mcp/schemas/server.json",
   "maintainers": ["ferinator"],
   "name": "Bullrun",
-  "description": "Hosted remote MCP server for stock screening and company financials, an ML valuation model, company risk scores and supplier/customer/competitor networks, global markets and macro data, whole-universe ETF and UCITS fund research, and personal portfolio analysis.",
+  "description": "Global stock and UCITS ETF research without an API key: company search, transparent screens, price history and technicals, company news, financial statements, risk and relationships, macro and portfolio analysis. Dataset coverage and freshness are explicit; personal portfolios require sign-in.",
   "type": "mcp_server",
   "status": "beta",
-  "transport": ["streamable-http"],
-  "keywords": ["finance", "stocks", "portfolio", "screening", "valuation", "machine-learning", "risk", "supply-chain", "macro", "economics", "markets", "etf", "ucits", "index-funds", "isin", "oauth"]
+  "transport": ["streamable-http", "stdio"],
+  "keywords": ["finance", "stocks", "screening", "price-history", "technicals", "news", "etf", "ucits", "isin", "portfolio", "risk", "macro", "valuation"]
 }

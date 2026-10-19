@@ -3,7 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
 import { safe } from "./stockIdentity.js";
-import { calculatePriceRisk, pricesAscending, roundMetric } from "./etfAnalytics.js";
+import { anchoredWindow, calculatePriceRisk, pricesAscending, roundMetric } from "./etfAnalytics.js";
 import {
   findExactEtf,
   fractionToPct,
@@ -22,7 +22,8 @@ const inputSchema = {
     .describe("Two to ten exact Bullrun ETF listing tickers."),
   include: z.array(comparisonModule).min(1).max(9)
     .default(["classification", "market", "fund_data", "costs", "income", "benchmark"]),
-  performanceDays: z.number().int().min(30).max(1825).default(370),
+  performanceDays: z.number().int().min(30).max(1825).default(365)
+    .describe("Window in calendar days back from each fund's newest close; the start is the last close on or before that day. 365 matches the fund page and the screener's 1-year return."),
 };
 
 const outputSchema = {
@@ -66,8 +67,8 @@ export function registerCompareEtfs(server: McpServer): void {
         const include = [...new Set(args.include)];
         const needsPrices = include.some((module) => ["market", "performance", "risk"].includes(module));
         const needsHoldings = include.includes("holdings");
-        const limit = Math.min(1300, Math.max(2, Math.ceil(args.performanceDays * 0.75) + 15));
-        const startDate = new Date(Date.now() - args.performanceDays * 86_400_000).toISOString().slice(0, 10);
+        // Enough bars to reach the window's anchor even across holidays (weekday bars ~0.71/day).
+        const limit = Math.min(1400, Math.max(2, Math.ceil((args.performanceDays + 45) * 0.75) + 15));
 
         const bundles = await Promise.all(tickers.map(async (ticker) => {
           const enc = encodeURIComponent(ticker);
@@ -77,11 +78,19 @@ export function registerCompareEtfs(server: McpServer): void {
             needsPrices ? safe(bullrunGet<EtfPrice[]>(`/api/prices/${enc}`, { limit })) : Promise.resolve(null),
             needsHoldings ? safe(bullrunGet<EtfHolding[]>(`/api/etfs/${enc}/holdings`)) : Promise.resolve(null),
           ]);
-          return { ticker, identity, profile, prices: pricesAscending(priceResult, startDate), holdings: holdingResult ?? [] };
+          const window = anchoredWindow(pricesAscending(priceResult), args.performanceDays);
+          return { ticker, identity, profile, prices: window.rows, windowComplete: window.complete, holdings: holdingResult ?? [] };
         }));
 
-        const rows = bundles.map(({ ticker, identity, profile, prices, holdings }) => {
-          const row: Record<string, unknown> = { ticker, name: profile?.fundName ?? identity?.company ?? null };
+        const unresolved = bundles
+          .filter(({ identity, profile, prices }) => identity == null && profile == null && prices.length === 0)
+          .map(({ ticker }) => ticker);
+        const rows = bundles.map(({ ticker, identity, profile, prices, windowComplete, holdings }) => {
+          const row: Record<string, unknown> = {
+            ticker,
+            found: !unresolved.includes(ticker),
+            name: profile?.fundName ?? identity?.company ?? null,
+          };
           if (include.includes("classification")) Object.assign(row, {
             category: profile?.category ?? identity?.sector ?? null,
             focus: profile?.assetClass ?? identity?.industry ?? null,
@@ -108,10 +117,12 @@ export function registerCompareEtfs(server: McpServer): void {
           if (include.includes("performance") || include.includes("risk")) {
             const metrics = calculatePriceRisk(prices);
             if (include.includes("performance")) Object.assign(row, {
-              priceReturnPct: metrics.priceReturnPct,
-              annualizedPriceReturnPct: metrics.annualizedReturnPct,
+              priceReturnPct: roundMetric(metrics.priceReturnPct, 4),
+              annualizedPriceReturnPct: roundMetric(metrics.annualizedReturnPct, 4),
               performanceStartDate: metrics.startDate,
               performanceEndDate: metrics.endDate,
+              performanceCurrency: identity?.currency ?? null,
+              performanceWindowComplete: windowComplete,
             });
             if (include.includes("risk")) Object.assign(row, {
               volatilityAnnualizedPct: metrics.volatilityAnnualizedPct,
@@ -144,6 +155,15 @@ export function registerCompareEtfs(server: McpServer): void {
         const warnings = [
           "Performance and risk use close-price returns, not distribution-adjusted total returns.",
         ];
+        if (unresolved.length) {
+          warnings.unshift(`${unresolved.join(", ")} did not match any Bullrun ETF listing (found=false; its fields are empty, not zero). Check the ticker with search_etfs.`);
+        }
+        if (include.includes("performance") && rows.some((row) => row.found && row.performanceWindowComplete === false)) {
+          warnings.push(`At least one fund has less than ${args.performanceDays} days of price history (performanceWindowComplete=false); its return covers a shorter window and is not comparable.`);
+        }
+        if (include.includes("performance") && new Set(rows.filter((row) => row.found).map((row) => row.performanceCurrency)).size > 1) {
+          warnings.push("The funds trade in different currencies; their price returns include each currency's move and are not FX-adjusted.");
+        }
         if (include.includes("fund_data")) warnings.push("AUM and NAV currencies are not stored; cross-currency comparisons are not normalized.");
         if (include.includes("holdings") && rows.some((row) => row.holdingsComplete !== true)) warnings.push("At least one ETF has partial or unknown holdings coverage.");
 

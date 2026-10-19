@@ -5,6 +5,7 @@ import { requireUserScope } from "../auth/scopes.js";
 import { safe } from "./stockIdentity.js";
 import { roundMetric } from "./etfAnalytics.js";
 import { toolResult, type EtfHolding, type EtfProfile } from "./etfData.js";
+import { aggregateHoldings, HoldingMatcher, identify, type MatchBasis } from "./holdingIdentity.js";
 
 interface PortfolioPosition {
   symbol: string | null;
@@ -41,11 +42,9 @@ const outputSchema = {
   warnings: z.array(z.string()),
 };
 
-function key(symbol: string | null | undefined, name?: string | null): string | null {
-  const cleanSymbol = symbol?.trim().toUpperCase();
-  if (cleanSymbol) return `SYMBOL:${cleanSymbol}`;
-  const cleanName = name?.trim().toUpperCase().replace(/\s+/g, " ");
-  return cleanName ? `NAME:${cleanName}` : null;
+interface Underlying {
+  weightPct: number;
+  sources: string[];
 }
 
 export function registerAnalyzePortfolioFit(server: McpServer): void {
@@ -78,7 +77,19 @@ export function registerAnalyzePortfolioFit(server: McpServer): void {
 
         const positions = detail.positions ?? [];
         const pricedValue = positions.reduce((sum, position) => sum + Math.max(0, position.marketValueUsd ?? 0), 0);
-        const portfolioUnderlyings = new Map<string, { weightPct: number; sources: string[] }>();
+        // Underlyings are matched as securities, not symbols (see holdingIdentity):
+        // ROP is Roche in one fund's file and Roper Technologies in another's.
+        const portfolioUnderlyings = new HoldingMatcher<Underlying>();
+        const addUnderlying = (identity: ReturnType<typeof identify>, weightPct: number, source: string) => {
+          const hit = portfolioUnderlyings.find(identity);
+          if (hit) {
+            hit.entry.payload.weightPct += weightPct;
+            if (!hit.entry.payload.sources.includes(source)) hit.entry.payload.sources.push(source);
+            portfolioUnderlyings.learn(hit.entry, identity);
+          } else {
+            portfolioUnderlyings.add(identity, { weightPct, sources: [source] });
+          }
+        };
         let positionsWithLookThrough = 0;
         let portfolioLookThroughSourceWeightPct = 0;
 
@@ -92,40 +103,29 @@ export function registerAnalyzePortfolioFit(server: McpServer): void {
             if (holdings?.length) {
               positionsWithLookThrough++;
               portfolioLookThroughSourceWeightPct += positionWeightPct;
-              for (const holding of holdings) {
-                const holdingKey = key(holding.holdingSymbol, holding.holdingName);
-                if (!holdingKey) continue;
-                const effectiveWeight = positionWeightPct * (holding.weightPct ?? 0) / 100;
-                const current = portfolioUnderlyings.get(holdingKey) ?? { weightPct: 0, sources: [] };
-                current.weightPct += effectiveWeight;
-                if (!current.sources.includes(ticker)) current.sources.push(ticker);
-                portfolioUnderlyings.set(holdingKey, current);
+              for (const entry of aggregateHoldings(holdings).matcher.entries) {
+                addUnderlying(entry.identity, positionWeightPct * entry.payload.weightPct / 100, ticker);
               }
             } else {
-              const directKey = key(ticker, position.name);
-              if (!directKey) return;
-              const current = portfolioUnderlyings.get(directKey) ?? { weightPct: 0, sources: [] };
-              current.weightPct += positionWeightPct;
-              if (!current.sources.includes(ticker)) current.sources.push(ticker);
-              portfolioUnderlyings.set(directKey, current);
+              addUnderlying(identify({ holdingSymbol: ticker, holdingName: position.name }), positionWeightPct, ticker);
             }
           }));
         }
 
         const candidateHoldings = candidateHoldingsResult ?? [];
-        const duplicateRows = candidateHoldings
-          .map((holding) => {
-            const holdingKey = key(holding.holdingSymbol, holding.holdingName);
-            const existing = holdingKey ? portfolioUnderlyings.get(holdingKey) : null;
-            if (!existing) return null;
-            const candidateHoldingWeightPct = holding.weightPct ?? 0;
+        const duplicateRows = aggregateHoldings(candidateHoldings).matcher.entries
+          .map((entry) => {
+            const hit = portfolioUnderlyings.find(entry.identity);
+            if (!hit) return null;
+            const candidateHoldingWeightPct = entry.payload.weightPct;
             return {
-              symbol: holding.holdingSymbol,
-              name: holding.holdingName,
-              candidateHoldingWeightPct,
-              existingPortfolioLookThroughWeightPct: roundMetric(existing.weightPct),
-              candidateAllocationDuplicateWeightPct: roundMetric(candidateHoldingWeightPct * args.candidateWeightPct / 100),
-              existingSources: existing.sources,
+              symbol: entry.payload.symbol,
+              name: entry.payload.name,
+              matchedOn: hit.basis as MatchBasis,
+              candidateHoldingWeightPct: roundMetric(candidateHoldingWeightPct, 4) ?? 0,
+              existingPortfolioLookThroughWeightPct: roundMetric(hit.entry.payload.weightPct, 4),
+              candidateAllocationDuplicateWeightPct: roundMetric(candidateHoldingWeightPct * args.candidateWeightPct / 100, 4),
+              existingSources: hit.entry.payload.sources,
             };
           })
           .filter((row): row is NonNullable<typeof row> => row != null)

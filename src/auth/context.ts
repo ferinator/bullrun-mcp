@@ -21,11 +21,11 @@ export interface AuthContext {
   scopes: string[];
 }
 
-const storage = new AsyncLocalStorage<AuthContext>();
+const storage = new AsyncLocalStorage<AuthContext | undefined>();
 
 /** Run `fn` with `ctx` as the current request's auth context (or no context if undefined). */
 export function runWithAuth<T>(ctx: AuthContext | undefined, fn: () => T): T {
-  return ctx ? storage.run(ctx, fn) : fn();
+  return storage.run(ctx, fn);
 }
 
 /** The current request's auth context, or `undefined` for an anonymous request. */

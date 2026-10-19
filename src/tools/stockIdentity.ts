@@ -1,4 +1,5 @@
 import { bullrunGet } from "../bullrun.js";
+import { sameText, yahooAlternative } from "./stockDiscoveryData.js";
 
 export interface Stock {
   ticker: string;
@@ -52,6 +53,134 @@ export async function findExactStock(ticker: string): Promise<Stock | null> {
   );
 
   return matches?.find((s) => sameTicker(s, normalized)) ?? null;
+}
+
+/**
+ * How Bullrun stores tickers, for tool descriptions and not-found messages. The
+ * convention is NOT uniform: US and most European listings are the plain local
+ * symbol, while Asian listings keep their exchange suffix.
+ */
+export const TICKER_CONVENTION =
+  "Bullrun tickers: US and most European listings use the plain local symbol (AAPL, BMW, NESN, ABBN); most Asian and Indian listings keep their exchange suffix (Tokyo 6324.T, Hong Kong 0700.HK, Shanghai 600519.SS, Shenzhen 000001.SZ, Taiwan 2330.TW, Korea 000100.KS, Singapore D05.SI, India RELIANCE.NS), but some Japanese and Korean large caps are plain codes (Toyota 7203, Samsung 005930). Either form is resolved automatically when exactly one listing matches; use search_stocks to find a ticker by company name or ISIN.";
+
+export interface TickerResolution {
+  /** The Bullrun ticker to use, or null when none or several listings match. */
+  ticker: string | null;
+  stock: Stock | null;
+  /** Set when the input was not itself a stored ticker, e.g. "6324 resolved to 6324.T". */
+  note: string | null;
+  /** Listings the input could mean, when it is ambiguous. */
+  candidates: Stock[];
+}
+
+/**
+ * Suffixes a bare numeric code may be stored under: Japanese and Hong Kong/Taiwan
+ * codes are four digits, Korean and mainland Chinese six; Hong Kong also writes
+ * short codes unpadded (700 = 0700.HK).
+ */
+function numericVariants(code: string): string[] {
+  if (/^\d{6}$/.test(code)) return [`${code}.KS`, `${code}.KQ`, `${code}.SS`, `${code}.SZ`];
+  if (/^\d{4}$/.test(code)) return [`${code}.T`, `${code}.HK`, `${code}.TW`, `${code}.TWO`];
+  if (/^\d{1,3}$/.test(code)) return [`${code.padStart(4, "0")}.HK`];
+  const hk = /^(\d{1,3})\.HK$/.exec(code);
+  return hk ? [`${hk[1].padStart(4, "0")}.HK`] : [];
+}
+
+function isNotFound(err: unknown): boolean {
+  return err instanceof Error && /bullrun-api 404 /.test(err.message);
+}
+
+/**
+ * GET /api/stocks/{ticker}: the listing, a retired ticker's survivor, or null when
+ * there is none. Anything else -- unreachable API, quota, 5xx -- is thrown, so a
+ * tool reports an outage instead of telling the user the company is not covered.
+ */
+async function storedListing(ticker: string): Promise<Stock | null> {
+  try {
+    return await bullrunGet<Stock>(`/api/stocks/${encodeURIComponent(ticker)}`);
+  } catch (err) {
+    if (isNotFound(err)) return null;
+    const reason = err instanceof Error ? err.message : String(err);
+    throw new Error(/ 429 /.test(reason)
+      ? `Bullrun's request quota for this connection is used up (${reason.slice(0, 160)}). This is not a coverage answer; retry later.`
+      : `Bullrun's data API is not reachable right now (${reason.slice(0, 160)}). This is not a coverage answer; retry shortly.`);
+  }
+}
+
+/**
+ * Resolve what a user or agent typed to the stored Bullrun ticker: the ticker
+ * itself, a retired ticker's successor, a bare numeric code whose exchange suffix
+ * was left off (6324 -> 6324.T) when exactly one listing matches, or a Yahoo
+ * suffix on a symbol stored bare (BMW.DE -> BMW) when the venue agrees. Several
+ * matches are returned as candidates, never guessed between.
+ */
+export async function resolveStockTicker(input: string): Promise<TickerResolution> {
+  const normalized = input.trim().toUpperCase();
+  if (!normalized) return { ticker: null, stock: null, note: null, candidates: [] };
+  const direct = await storedListing(normalized);
+  if (direct) {
+    const renamed = direct.ticker.toUpperCase() !== normalized;
+    return {
+      ticker: direct.ticker,
+      stock: direct,
+      note: renamed ? `${normalized} is a retired ticker; its listing is now ${direct.ticker}.` : null,
+      candidates: [],
+    };
+  }
+
+  const variants = numericVariants(normalized);
+  if (variants.length) {
+    const found = (await Promise.all(variants.map(storedListing)))
+      .filter((stock): stock is Stock => stock != null);
+    const unique = [...new Map(found.map((stock) => [stock.ticker.toUpperCase(), stock])).values()];
+    if (unique.length === 1) {
+      const stock = unique[0];
+      return {
+        ticker: stock.ticker,
+        stock,
+        note: `${normalized} resolved to ${stock.ticker} (${[stock.company, stock.exchange].filter(Boolean).join(", ")}): Bullrun keeps the exchange suffix on this market.`,
+        candidates: [],
+      };
+    }
+    if (unique.length > 1) return { ticker: null, stock: null, note: null, candidates: unique };
+  }
+
+  const yahoo = yahooAlternative(normalized);
+  if (yahoo) {
+    for (const root of yahoo.searches) {
+      const stock = await storedListing(root);
+      if (stock && yahoo.venues.some((venue) => sameText(stock.exchange, venue))) {
+        return {
+          ticker: stock.ticker,
+          stock,
+          note: `${normalized} resolved to ${stock.ticker} (${stock.exchange}): Bullrun stores this listing without the Yahoo suffix.`,
+          candidates: [],
+        };
+      }
+    }
+  }
+  return { ticker: null, stock: null, note: null, candidates: [] };
+}
+
+/** The not-found text for a stock tool: candidates when ambiguous, else the convention. */
+export function tickerNotFoundText(input: string, resolution: TickerResolution): string {
+  const typed = input.trim().toUpperCase();
+  if (resolution.candidates.length) {
+    const list = resolution.candidates
+      .map((stock) => `${stock.ticker} (${[stock.company, stock.exchange, stock.country].filter(Boolean).join(", ")})`)
+      .join("; ");
+    return `"${typed}" matches more than one Bullrun listing: ${list}. Call again with the exact ticker of the one you mean.`;
+  }
+  return `No Bullrun listing for "${typed}". ${TICKER_CONVENTION} A missing listing here is not proof the company does not exist.`;
+}
+
+/**
+ * A price or ratio without storage noise: stored float32 closes come back as
+ * 758.5999755859375. Seven significant digits keep every real price intact.
+ */
+export function tidy(value: number | null | undefined, significant = 7): number | null {
+  if (value == null || !Number.isFinite(value)) return null;
+  return Number(value.toPrecision(significant));
 }
 
 export function identityPayload(stock: Stock | null): Record<string, unknown> | null {

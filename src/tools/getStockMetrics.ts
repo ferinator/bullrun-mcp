@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { findExactStock, identityPayload, safe } from "./stockIdentity.js";
+import { identityPayload, resolveStockTicker, safe, TICKER_CONVENTION, tickerNotFoundText, tidy } from "./stockIdentity.js";
 
 interface Valuation {
   ticker: string;
@@ -70,23 +70,27 @@ export function registerGetStockMetrics(server: McpServer): void {
       title: "Get stock metrics",
       annotations: { readOnlyHint: true },
       description:
-        "Fetch a consolidated metrics snapshot for a single stock by ticker: identity (company, exchange, currency, sector, industry, country, ISIN), latest daily price (OHLCV), latest valuation (market cap, P/E, dividend yield, annual dividend per share), the most recent reported financials (revenue, gross/operating income, EBITDA, net income, diluted EPS, free & operating cash flow, total debt, cash, total assets, equity) and a short company description. Use the exact ticker as listed on Bullrun - the native local-exchange symbol (e.g. AAPL, BMW, ABBN, NESN, or a numeric code like 005930), NOT Yahoo-style country suffixes like BMW.DE or ABBN.SW. If a ticker returns no data, use screen_stocks (by sector/country) to find the exact symbol. Read-only.",
+        "Fetch a consolidated metrics snapshot for a single stock by ticker: identity (company, exchange, currency, sector, industry, country, ISIN), latest daily price (OHLCV), latest valuation (market cap, P/E, dividend yield, annual dividend per share), the most recent reported financials (revenue, gross/operating income, EBITDA, net income, diluted EPS, free & operating cash flow, total debt, cash, total assets, equity) and a short company description. Prices are in the listing's trading currency; financials in their own sourceCurrency. " + TICKER_CONVENTION + " Read-only.",
       inputSchema: {
         ticker: z.string().min(1)
-          .describe("The stock ticker exactly as listed on Bullrun - the native local-exchange symbol, e.g. \"AAPL\", \"BMW\" (not \"BMW.DE\"), \"ABBN\" (not \"ABBN.SW\"), \"NESN\", or a numeric code like \"005930\". Do not append Yahoo-style country suffixes."),
+          .describe("The stock ticker as Bullrun lists it, e.g. \"AAPL\", \"BMW\", \"NESN\", \"6324.T\", \"0700.HK\" or \"005930\". A bare numeric code is resolved when exactly one listing matches."),
       },
     },
     async (args) => {
       try {
         requirePublicScope("read:market");
-        const ticker = args.ticker.trim().toUpperCase();
-        if (!ticker) {
+        if (!args.ticker.trim()) {
           return { isError: true, content: [{ type: "text", text: "ticker is required" }] };
         }
+        const resolution = await resolveStockTicker(args.ticker);
+        if (!resolution.ticker) {
+          return { content: [{ type: "text", text: tickerNotFoundText(args.ticker, resolution) }] };
+        }
+        const ticker = resolution.ticker;
+        const identity = resolution.stock;
         const enc = encodeURIComponent(ticker);
 
-        const [identity, valuations, prices, financials, profile] = await Promise.all([
-          findExactStock(ticker),
+        const [valuations, prices, financials, profile] = await Promise.all([
           safe(bullrunGet<Valuation[]>(`/api/valuations/${enc}`, { limit: 1 })),
           safe(bullrunGet<Price[]>(`/api/prices/${enc}`, { limit: 1 })),
           safe(bullrunGet<Financials[]>(`/api/financials/${enc}`)),
@@ -97,26 +101,18 @@ export function registerGetStockMetrics(server: McpServer): void {
         const price = prices?.[0] ?? null;
         const fin = pickLatestFinancials(financials);
 
-        if (!identity && !valuation && !price && !fin && !profile) {
-          return {
-            content: [{
-              type: "text",
-              text: `No data found for ticker "${ticker}". Bullrun uses the plain local-exchange symbol, not Yahoo-style suffixes - e.g. "BMW" not "BMW.DE", "ABBN" not "ABBN.SW". Drop any .XX suffix and retry, or use screen_stocks (by sector/country) to find the exact symbol.`,
-            }],
-          };
-        }
-
         const summary = profile?.longBusinessSummary ?? null;
         const payload = {
           ticker,
+          ...(resolution.note ? { tickerResolution: resolution.note } : {}),
           identity: identityPayload(identity),
           latestPrice: price
             ? {
                 date: price.tradeDate,
-                close: price.closePrice,
-                open: price.openPrice,
-                high: price.highPrice,
-                low: price.lowPrice,
+                close: tidy(price.closePrice),
+                open: tidy(price.openPrice),
+                high: tidy(price.highPrice),
+                low: tidy(price.lowPrice),
                 volume: price.volume,
               }
             : null,
@@ -124,9 +120,9 @@ export function registerGetStockMetrics(server: McpServer): void {
             ? {
                 date: valuation.tradeDate,
                 marketCap: valuation.marketCap,
-                peRatio: valuation.peRatio,
-                dividendYieldPct: valuation.dividendYield,
-                annualDividendPerShare: valuation.annualDividendPerShare,
+                peRatio: tidy(valuation.peRatio, 5),
+                dividendYieldPct: tidy(valuation.dividendYield, 5),
+                annualDividendPerShare: tidy(valuation.annualDividendPerShare),
               }
             : null,
           latestFinancials: fin
@@ -140,14 +136,14 @@ export function registerGetStockMetrics(server: McpServer): void {
                 operatingIncome: fin.operatingIncome,
                 ebitda: fin.ebitda,
                 netIncome: fin.netIncome,
-                dilutedEps: fin.dilutedEps,
+                dilutedEps: tidy(fin.dilutedEps),
                 freeCashflow: fin.freeCashflow,
                 operatingCashflow: fin.operatingCashflow,
                 totalDebt: fin.totalDebt,
                 cash: fin.cashAndCashEquivalents,
                 totalAssets: fin.totalAssets,
                 stockholdersEquity: fin.stockholdersEquity,
-                dividendsPerShare: fin.dividendsPerShare,
+                dividendsPerShare: tidy(fin.dividendsPerShare),
               }
             : null,
           description: summary ? (summary.length > 900 ? `${summary.slice(0, 900)}...` : summary) : null,

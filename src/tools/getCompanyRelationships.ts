@@ -4,6 +4,7 @@ import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
 import { toolResult } from "./etfData.js";
 import { round } from "./riskData.js";
+import { resolveStockTicker, TICKER_CONVENTION, tickerNotFoundText } from "./stockIdentity.js";
 
 interface NetworkNode { id: string; name: string; role: string; ticker: string | null }
 interface NetworkMetric {
@@ -76,7 +77,7 @@ function clip(text: string | null | undefined, max: number): string | null {
 
 const inputSchema = {
   ticker: z.string().min(1)
-    .describe("Exact Bullrun ticker, native local-exchange symbol (e.g. \"AAPL\", \"SAP\", \"ASML\"); no Yahoo-style suffixes."),
+    .describe("Bullrun ticker, e.g. \"AAPL\", \"SAP\", \"ASML\". " + TICKER_CONVENTION),
   roles: z.array(z.enum(ROLES)).min(1).optional()
     .describe("Which relationships to return, from this company's point of view. Default: all four."),
   verifiedOnly: z.boolean().default(false)
@@ -100,8 +101,12 @@ export function registerGetCompanyRelationships(server: McpServer): void {
     async (args) => {
       try {
         requirePublicScope("read:market");
-        const ticker = args.ticker.trim().toUpperCase();
-        if (!ticker) return { isError: true, content: [{ type: "text", text: "ticker is required" }] };
+        if (!args.ticker.trim()) return { isError: true, content: [{ type: "text", text: "ticker is required" }] };
+        const resolution = await resolveStockTicker(args.ticker);
+        if (!resolution.ticker) {
+          return { content: [{ type: "text" as const, text: tickerNotFoundText(args.ticker, resolution) }] };
+        }
+        const ticker = resolution.ticker;
         const roles = new Set<Role>(args.roles?.length ? args.roles : ROLES);
         const types = [...new Set([...roles].map((r) => ROLE_TO_TYPE[r]))].join(",");
 

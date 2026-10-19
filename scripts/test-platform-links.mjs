@@ -19,6 +19,24 @@ function destination(tool, args, payload) {
   return { link, url };
 }
 
+test("new research continuations use real pages and disclose unavailable historical or shared-network UI state", () => {
+  const calendar = destination("get_corporate_calendar", {}, { calendars: [{type:"ex_dividend",events:[{ticker:"AAPL"}]}] });
+  assert.equal(calendar.url.pathname, "/calendar/ex-dividend");
+  assert.match(calendar.link.description, /MCP filters.*not applied/);
+  const history = destination("get_company_risk_history", {ticker:"AAPL"}, {history:[{asOfDate:"2026-10-18"}]});
+  assert.equal(history.url.pathname, "/stocks/AAPL/analysis");
+  assert.equal(history.url.hash, "#dials");
+  assert.match(history.link.description, /does not reproduce this historical window/);
+  const coverage = destination("get_company_data_coverage", {ticker:"AAPL"}, {datasets:[{dataset:"prices"}]});
+  assert.equal(coverage.url.pathname, "/stocks/AAPL");
+  const network = destination("compare_company_exposures", {}, {companies:[{ticker:"AAPL",subject:{nodeId:"1"}}]});
+  assert.equal(network.url.pathname, "/stocks/AAPL/analysis");
+  assert.equal(network.url.hash, "#network");
+  assert.match(network.link.description, /does not reproduce.*shared-counterparty/);
+  assert.equal(continuationFor("get_company_risk_history", {ticker:"UNKNOWN"}, {history:[]}), null);
+  assert.equal(continuationFor("get_corporate_calendar", {}, {calendars:[]}), null);
+});
+
 test("continuations stay on the canonical origin and encode entity identifiers", () => {
   const { url } = destination("get_stock_metrics", { ticker: " BRK/B " }, { ticker: "BRK/B", identity: { company: "Berkshire" } });
   assert.equal(url.pathname, "/stocks/BRK%2FB");
@@ -47,6 +65,24 @@ test("stock screen preserves normalized AND/OR rules, aliases, lookback and list
   const universe = destination("screen_stocks", {}, { query: { rules: [], lookbackMode: "annual", lookback: 40 } }).url;
   assert.equal(JSON.parse(universe.searchParams.get("filter")).lookback, 40);
   assert.deepEqual(JSON.parse(universe.searchParams.get("filter")).rules, []);
+});
+
+test("discovery links preserve preset rules and avoid choosing ambiguous stock listings", () => {
+  assert.equal(continuationFor("search_stocks", {}, { resolvedTicker: null, candidates: [{ ticker: "BMW" }, { ticker: "BMW3" }] }), null);
+  assert.equal(destination("search_stocks", {}, { resolvedTicker: "BMW" }).url.pathname, "/stocks/BMW");
+  const query = { rules: [{ metric: "peRatio", operator: "<=", value: "20", groupId: 1 }], lookbackMode: "annual", lookback: 3,
+    countries: ["Germany"], sortBy: "peRatio", order: "asc" };
+  const preset = destination("screen_stock_presets", {}, { action: "run", query }).url;
+  assert.deepEqual(JSON.parse(preset.searchParams.get("filter")).rules, query.rules);
+  assert.equal(preset.searchParams.get("sortBy"), "peRatio");
+  assert.equal(continuationFor("screen_stock_presets", {}, { action: "list", presets: [] }), null);
+  for (const [name, field] of [["get_stock_price_history", "bars"], ["get_company_news", "articles"], ["find_stock_peers", "peers"]]) {
+    assert.equal(continuationFor(name, { ticker: "AAPL" }, { [field]: [] }), null);
+    const { link, url } = destination(name, { ticker: "AAPL", since: "2026-01-01" }, { [field]: [{}] });
+    assert.equal(url.pathname, "/stocks/AAPL");
+    assert.ok(link.description.includes("not"));
+    assert.equal(url.searchParams.has("since"), false);
+  }
 });
 
 test("risk-board links preserve multi-band coverage and every supported sort", () => {
@@ -108,6 +144,18 @@ test("ETF funds, index groups and comparisons use real app routes and disclose U
   assert.equal(destination("get_etf_exposures", {}, { ticker: "SPY", coverage: { storedHoldingRows: 0 }, exposures: { asset: [{ name: "Equity" }] } }).url.pathname, "/etfs/SPY");
   assert.equal(destination("simulate_etf_cost", {}, { ticker: "SPY", assumptions: { currency: "USD", storedExpenseRatioPct: null } }).url.pathname, "/etfs/SPY");
   assert.match(destination("screen_valuation_model", { model: "valuation_ps" }, {}).link.description, /does not apply the MCP screen/);
+});
+
+test("stock comparison links use covered stock identities and disclose the four-instrument limit", () => {
+  const coverage = ["AAPL", "MSFT", "GOOGL", "V", "MA"].map(ticker => ({ ticker, identityAvailable: true, quoteType: "EQUITY" }));
+  const result = continuationFor("compare_stocks", {}, { coverage });
+  assert.equal(new URL(result.url).pathname, "/compare/aapl-vs-msft-vs-googl-vs-v");
+  assert.match(result.description, /four instruments/);
+  assert.match(result.description, /settings are not carried over/);
+  assert.equal(continuationFor("compare_stocks", {}, { coverage: [{ ticker: "SPY", identityAvailable: true, quoteType: "ETF" }] }), null);
+  assert.equal(continuationFor("compare_stocks", {}, { coverage: [{ ticker: "UNKNOWN", identityAvailable: false }] }), null);
+  const single = continuationFor("compare_stocks", {}, { coverage: coverage.slice(0, 1) });
+  assert.equal(new URL(single.url).pathname, "/stocks/AAPL");
 });
 
 test("unavailable entities and errors do not gain misleading links", () => {

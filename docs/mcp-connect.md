@@ -6,22 +6,32 @@ Bullrun runs a hosted **remote MCP server** at:
 https://mcp.bull-run.org/mcp
 ```
 
-It speaks the **Streamable HTTP** transport and is an **OAuth 2.1 protected resource**.
-The first time you connect, your client walks an automatic discovery handshake and sends you
-through Google sign-in; after you authorize, the per-user portfolio tools resolve *your*
-Bullrun account. Public market-data tools work for any connected user.
+It speaks **Streamable HTTP**. **Public research needs no API key or Bullrun account.**
+The hosted endpoint accepts anonymous research connections. OAuth 2.1 + PKCE is available
+for personal portfolios and saved drafts: authorize with Google when you need those tools.
+Some clients start an OAuth connection automatically; anonymous stdio is also available.
 
-> No JSON editing required for Claude — paste the URL and click through the login. The configs
+> No JSON editing required for Claude — add the remote URL in the connector settings. The configs
 > below are for clients that connect via a file.
 
 ## What you can do once connected
+
+- **Find the right company** by name, native ticker or ISIN (`search_stocks`), inspect
+  transparent stock-screen presets (`screen_stock_presets`), and discover peers with their
+  selection criteria (`find_stock_peers`).
+- **Inspect price history and technicals** (`get_stock_price_history`) using stored daily
+  bars, optionally aggregated weekly/monthly. **Read company news** (`get_company_news`)
+  with publication dates and freshness; reads may request a bounded background refresh.
 
 - **Screen the global universe** — filter by sector / industry / country / market cap, sort by
   P/E, dividend yield, revenue or revenue growth (`screen_stocks`).
 - **Pull a full company snapshot** — identity (ISIN/LEI/CIK), latest price, valuation,
   financials and a description for one ticker (`get_stock_metrics`), or 1–15 years of history
   (`get_financial_history`), quality/moat & capital-allocation metrics (`get_quality_moat_metrics`),
-  forward estimates, operating KPIs, revenue breakdowns and earnings-call transcripts.
+  revenue breakdowns and available forward revenue/EPS estimates. US transcript reads
+  can queue the latest two calls from the free DefeatBeta source; cached reads can be
+  empty before refresh completes. Operating KPI observations and non-US transcripts
+  remain limited; check `get_company_data_coverage` before promising these datasets.
 - **Read Bullrun's valuation model** — the gap between the P/E (or price/sales) a stock's
   fundamentals typically command and what it trades at, the implied model-typical P/E, and a
   relative 1-year forecast signal, for any ticker (`get_valuation_model`) or ranked across the

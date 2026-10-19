@@ -156,7 +156,7 @@ const inputSchema = {
   })).default([])
     .describe("Numeric rules. A fund with no value for a ruled metric never matches that rule."),
   includeSecondary: z.boolean().default(false)
-    .describe("Include secondary venue listings of the same fund. Default false — one row per fund's primary listing."),
+    .describe("Return every venue listing as its own row. Default false: one row per FUND (by fund ISIN), showing its most liquid listing with the others under otherListings. Use exchange/currency to choose the venue, e.g. exchange \"SW\" for the SIX line."),
   sortBy: z.enum(SORT_KEYS).default("totalAssets")
     .describe("Sort field applied to the returned rows."),
   order: z.enum(["desc", "asc"]).default("desc")
@@ -212,6 +212,39 @@ function project(row: EtfScreenRow): Record<string, unknown> {
     avgTurnover90d: row.avgTurnover90d ?? null,
     isPrimaryListing: row.primaryTicker == null,
   };
+}
+
+/** One fund, however many venues it is listed on: fund ISIN, else listing ISIN, else ticker. */
+function fundKey(row: Record<string, unknown>): string {
+  return String(row.fundIsin ?? row.isin ?? row.ticker).toUpperCase();
+}
+
+/**
+ * The same UCITS fund is listed on many venues under different tickers, and each
+ * venue line is stored as a primary listing -- so includeSecondary=false never
+ * collapsed them (VWCE.AS, VWCE.DE, VWCE.MI, VWRA.L... came back as six funds).
+ * Collapse by fund here: the most traded line represents the fund.
+ */
+function collapseVenues(rows: Array<Record<string, unknown>>): Array<Record<string, unknown>> {
+  const byFund = new Map<string, Array<Record<string, unknown>>>();
+  for (const row of rows) {
+    const key = fundKey(row);
+    const group = byFund.get(key);
+    if (group) group.push(row);
+    else byFund.set(key, [row]);
+  }
+  const liquidity = (row: Record<string, unknown>) => Number(row.avgTurnover90d ?? -1);
+  return [...byFund.values()].map((group) => {
+    const ordered = [...group].sort((a, b) => liquidity(b) - liquidity(a)
+      || Number(b.isPrimaryListing) - Number(a.isPrimaryListing)
+      || String(a.ticker).localeCompare(String(b.ticker)));
+    const [representative, ...others] = ordered;
+    return {
+      ...representative,
+      listingCount: group.length,
+      otherListings: others.map((row) => ({ ticker: row.ticker, exchange: row.exchange, tradingCurrency: row.tradingCurrency })),
+    };
+  });
 }
 
 function sortValue(row: Record<string, unknown>, key: SortKey): unknown {
@@ -282,7 +315,8 @@ export function registerScreenEtfs(server: McpServer): void {
           SCREENER_TIMEOUT_MS,
         );
 
-        const projected = (response.rows ?? []).map(project);
+        const listings = (response.rows ?? []).map(project);
+        const projected = args.includeSecondary ? listings : collapseVenues(listings);
         projected.sort((a, b) => nullableCompare(
           sortValue(a, args.sortBy),
           sortValue(b, args.sortBy),
@@ -341,7 +375,8 @@ export function registerScreenEtfs(server: McpServer): void {
             rowsReturnedByUpstream: response.rows?.length ?? 0,
             upstreamTruncated: Boolean(response.truncated),
             includeSecondary: args.includeSecondary,
-            note: "The screened universe covers ETF listings with a price bar in the last 30 days; dormant or delisted lines are out of scope.",
+            distinctFundsInReturnedRows: new Set(listings.map(fundKey)).size,
+            note: "The screened universe covers ETF listings with a price bar in the last 30 days; dormant or delisted lines are out of scope. matchCount counts venue listings; with includeSecondary=false each result row is one fund.",
           },
           matchCount: response.matchCount ?? 0,
           returned: results.length,

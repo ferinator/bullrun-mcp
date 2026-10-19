@@ -3,6 +3,19 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
 import { fractionToPct, toolResult } from "./etfData.js";
+import { exchangeMatches } from "./stockDiscoveryData.js";
+
+/** A venue listing from /api/etfs, enough to name the line to buy. */
+interface VenueListing {
+  ticker: string;
+  exchange?: string | null;
+  currency?: string | null;
+  fundIsin?: string | null;
+  isin?: string | null;
+}
+
+/** Venue names people use that are not Bullrun exchange codes. */
+const VENUE_ALIASES: Record<string, string> = { SIX: "SW", "SIX SWISS EXCHANGE": "SW", XSWX: "SW", XETR: "XETRA", XLON: "LSE" };
 
 /** GET /api/etfs/index/{indexKey} — one row per FUND, not per venue listing. */
 interface IndexFund {
@@ -43,6 +56,10 @@ const inputSchema = {
     .describe("ucits (default) restricts to domiciles a European retail investor can actually buy. all adds US-domiciled trackers, which look cheaper but are not purchasable by EU retail."),
   distributionPolicy: z.enum(["ACCUMULATING", "DISTRIBUTING"]).optional()
     .describe("Optionally keep only accumulating or only distributing share classes."),
+  exchange: z.string().optional()
+    .describe("Keep only funds listed on this venue and name each one's ticker there, e.g. SW (SIX Swiss Exchange), XETRA, LSE, AS, MI. A Swiss investor wanting the SIX line passes SW."),
+  currency: z.string().optional()
+    .describe("Keep only funds with a listing trading in this currency (e.g. CHF, EUR, USD, GBP) and name that line."),
   limit: z.number().int().min(1).max(100).default(25)
     .describe("Maximum funds (or index families) to return, 1-100."),
 };
@@ -122,6 +139,23 @@ export function registerGetEtfIndexGroup(server: McpServer): void {
         if (args.distributionPolicy) {
           funds = funds.filter((fund) => fund.distributionPolicy === args.distributionPolicy);
         }
+        const exchange = args.exchange?.trim()
+          ? VENUE_ALIASES[args.exchange.trim().toUpperCase()] ?? args.exchange.trim().toUpperCase()
+          : null;
+        const currency = args.currency?.trim().toUpperCase() || null;
+        const venueLines = new Map<string, VenueListing>();
+        if (exchange || currency) {
+          const lines = await bullrunGet<VenueListing[]>("/api/etfs", {
+            indexKey, currency, includeSecondary: true, limit: 500,
+          });
+          for (const line of lines ?? []) {
+            const key = (line.fundIsin ?? line.isin)?.toUpperCase();
+            if (!key || venueLines.has(key)) continue;
+            if (exchange && !exchangeMatches(line.exchange, exchange)) continue;
+            venueLines.set(key, line);
+          }
+          funds = funds.filter((fund) => fund.fundIsin != null && venueLines.has(fund.fundIsin.toUpperCase()));
+        }
         const results = funds.slice(0, args.limit).map((fund) => ({
           fundIsin: fund.fundIsin ?? null,
           representativeTicker: fund.ticker,
@@ -134,6 +168,10 @@ export function registerGetEtfIndexGroup(server: McpServer): void {
           totalAssets: fund.totalAssets ?? null,
           listingCount: fund.listingCount,
           venues: fund.venues ?? [],
+          ...(exchange || currency ? (() => {
+            const line = venueLines.get(fund.fundIsin!.toUpperCase())!;
+            return { venueListing: { ticker: line.ticker, exchange: line.exchange ?? null, tradingCurrency: line.currency ?? null } };
+          })() : {}),
         }));
 
         if (group.fundsWithoutFee > 0) {
@@ -147,6 +185,9 @@ export function registerGetEtfIndexGroup(server: McpServer): void {
         if (args.distributionPolicy) {
           warnings.push(`Filtered to ${args.distributionPolicy} share classes only; fee coverage counts describe the unfiltered group.`);
         }
+        if (exchange || currency) {
+          warnings.push(`Filtered to funds with a listing${exchange ? ` on ${exchange}` : ""}${currency ? ` trading in ${currency}` : ""}; venueListing names that line. Fee coverage counts describe the unfiltered group.`);
+        }
 
         return toolResult({
           mode: "index_group",
@@ -159,7 +200,8 @@ export function registerGetEtfIndexGroup(server: McpServer): void {
             fundsWithoutFee: group.fundsWithoutFee,
             cheapestFeePct: fractionToPct(group.cheapestFee),
             dearestFeePct: fractionToPct(group.dearestFee),
-            fundsAfterPolicyFilter: funds.length,
+            fundsAfterFilters: funds.length,
+            venueFilter: exchange || currency ? { exchange, currency } : null,
             returned: results.length,
             dedup: "One row per fund; venue listings are collapsed into listingCount/venues.",
           },

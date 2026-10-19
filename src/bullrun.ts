@@ -7,6 +7,8 @@
  */
 import { getAuth } from "./auth/context.js";
 import { getMcpUsage } from "./usage/context.js";
+import { getGateway } from "./gateway/context.js";
+import { gatewayHeaders } from "./gateway/mcprush.js";
 
 const DEFAULT_BASE = "http://localhost:8085";
 const DEFAULT_AUTH_SERVER = "https://bull-run.org";
@@ -65,6 +67,7 @@ export async function bullrunGet<T>(path: string, params?: QueryParams, timeoutM
   const headers: Record<string, string> = {
     Accept: "application/json",
     "X-Bullrun-Client": "mcp",
+    ...gatewayHeaders("GET", url),
   };
   const auth = getAuth();
   if (auth?.token) {
@@ -76,7 +79,7 @@ export async function bullrunGet<T>(path: string, params?: QueryParams, timeoutM
   try {
     res = await fetch(url, {
       headers,
-      signal: AbortSignal.timeout(timeoutMs ?? config.requestTimeoutMs),
+      signal: AbortSignal.timeout(upstreamTimeout(timeoutMs)),
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
@@ -92,6 +95,11 @@ export async function bullrunGet<T>(path: string, params?: QueryParams, timeoutM
   return (await res.json()) as T;
 }
 
+function upstreamTimeout(timeoutMs?: number): number {
+  const deadline = getGateway()?.deadline;
+  return Math.max(1, Math.min(timeoutMs ?? config.requestTimeoutMs, deadline ? deadline - Date.now() : Infinity));
+}
+
 /**
  * POST a JSON body to bullrun-api and parse the JSON response. Like {@link bullrunGet}
  * it forwards the caller's bearer token (so per-user endpoints resolve the right user)
@@ -105,6 +113,7 @@ export async function bullrunPost<T>(path: string, body?: unknown, timeoutMs?: n
     Accept: "application/json",
     "Content-Type": "application/json",
     "X-Bullrun-Client": "mcp",
+    ...gatewayHeaders("POST", url),
   };
   const auth = getAuth();
   if (auth?.token) {
@@ -118,7 +127,7 @@ export async function bullrunPost<T>(path: string, body?: unknown, timeoutMs?: n
       method: "POST",
       headers,
       body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(timeoutMs ?? config.requestTimeoutMs),
+      signal: AbortSignal.timeout(upstreamTimeout(timeoutMs)),
     });
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
@@ -144,5 +153,9 @@ function addMcpUsageHeaders(headers: Record<string, string>): void {
   }
   if (usage?.invocationId) {
     headers["X-Bullrun-Mcp-Invocation"] = usage.invocationId;
+  }
+  if (usage?.clientClass) {
+    // Moves a directory probe's anonymous reads to the API's smaller probe pool.
+    headers["X-Bullrun-Mcp-Client-Class"] = usage.clientClass;
   }
 }

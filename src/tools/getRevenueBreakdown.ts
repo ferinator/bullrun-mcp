@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { findExactStock, identityPayload, safe } from "./stockIdentity.js";
+import { identityPayload, resolveStockTicker, safe, TICKER_CONVENTION, tickerNotFoundText } from "./stockIdentity.js";
 
 interface RevenueBreakdown {
   ticker: string;
@@ -50,7 +50,7 @@ function addPercentages(rows: RevenueBreakdown[]): Record<string, unknown>[] {
 
 const inputSchema = {
   ticker: z.string().min(1)
-    .describe("The ticker exactly as listed on Bullrun, e.g. \"SPGI\", \"MSFT\", \"V\"."),
+    .describe("The Bullrun ticker, e.g. \"SPGI\", \"MSFT\", \"V\". " + TICKER_CONVENTION),
   dimension: z.enum(["segment", "geography", "product", "customer", "other", "all"]).default("all")
     .describe("Breakdown dimension to return, or all dimensions."),
   limit: z.number().int().min(1).max(300).default(160)
@@ -70,13 +70,17 @@ export function registerGetRevenueBreakdown(server: McpServer): void {
     async (args) => {
       try {
         requirePublicScope("read:market");
-        const ticker = args.ticker.trim().toUpperCase();
+        const resolution = await resolveStockTicker(args.ticker);
+        if (!resolution.ticker) {
+          return { content: [{ type: "text" as const, text: tickerNotFoundText(args.ticker, resolution) }] };
+        }
+        const ticker = resolution.ticker;
         if (!ticker) return { isError: true, content: [{ type: "text", text: "ticker is required" }] };
 
         const enc = encodeURIComponent(ticker);
         const dimension = args.dimension === "all" ? undefined : args.dimension.toUpperCase();
         const [identity, rows] = await Promise.all([
-          findExactStock(ticker),
+          Promise.resolve(resolution.stock),
           safe(bullrunGet<RevenueBreakdown[]>(`/api/company-intelligence/${enc}/revenue-breakdown`, {
             dimension,
             limit: args.limit,
@@ -86,6 +90,7 @@ export function registerGetRevenueBreakdown(server: McpServer): void {
         const breakdown = rows ?? [];
         const payload = {
           ticker,
+          ...(resolution.note ? { tickerResolution: resolution.note } : {}),
           identity: identityPayload(identity),
           coverage: {
             rows: breakdown.length,

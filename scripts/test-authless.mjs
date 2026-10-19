@@ -524,7 +524,8 @@ ok(
     exposuresPayload.availableTypes?.includes("currency") &&
     exposuresPayload.unavailableTypes?.includes("factor") &&
     exposuresPayload.unavailableTypes?.includes("thematic") &&
-    exposuresPayload.coverage?.resolvedWeightPct === 15,
+    exposuresPayload.coverage?.classifiedWeightPct?.sector === 15 &&
+    exposuresPayload.coverage?.sectorBasisWeightPct?.bullrunInstrument === 15,
   "get_etf_exposures -> holdings look-through + unavailable factor/thematic coverage",
   JSON.stringify(exposuresPayload).slice(0, 320),
 );
@@ -613,7 +614,7 @@ ok(
 );
 
 const crUnknown = await client.callTool({ name: "get_company_risk", arguments: { ticker: "ZZZZ" } });
-ok(!crUnknown.isError && /No risk data found/.test(crUnknown.content?.[0]?.text ?? ""), "get_company_risk(unknown) -> not-found message, not six dark dials",
+ok(!crUnknown.isError && /No Bullrun listing for "ZZZZ"/.test(crUnknown.content?.[0]?.text ?? ""), "get_company_risk(unknown) -> not-found message, not six dark dials",
   crUnknown.content?.[0]?.text ?? "");
 
 const rel = await client.callTool({ name: "get_company_relationships", arguments: { ticker: "V" } });
@@ -649,8 +650,8 @@ ok(
     riskBoardHits.lastQuery?.band === "STRETCHED,ACUTE" &&
     riskBoardHits.lastQuery?.sort === "score" &&
     board2.rows?.length === 2 &&
-    riskBoardHits.count === 1,
-  "screen_risk_board -> mechanism/band/sort forwarded, rows compacted, repeated screen reuses cached data",
+    riskBoardHits.count === 2,
+  "screen_risk_board -> mechanism/band/sort forwarded, rows compacted, repeat fetches live data",
   JSON.stringify({ hits: riskBoardHits, first: board1.rows?.[0] }).slice(0, 320),
 );
 

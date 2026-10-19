@@ -9,6 +9,7 @@ import { runWithAuth } from "./auth/context.js";
 import { runWithMcpUsage, type McpUsageContext } from "./usage/context.js";
 import { verifyAccessToken } from "./auth/tokenVerifier.js";
 import { protectedResourceMetadata, wwwAuthenticate, PRM_PATH } from "./auth/protectedResource.js";
+import { MCPRUSH_PATH, gatewaySessionOwner, mcprushEnabled, mcprushGate } from "./gateway/mcprush.js";
 
 const app = express();
 app.use(express.json({ limit: "1mb" }));
@@ -46,6 +47,7 @@ app.get("/health", (_req: Request, res: Response) => {
       // even when `required` is false (authless mode).
       loginEndpoint: AUTH_MCP_PATH,
     },
+    sessions: { open: sessions.size, max: MAX_SESSIONS, idleTtlSeconds: Math.round(SESSION_IDLE_TTL_MS / 1000) },
     uptimeSeconds: Math.round(process.uptime()),
   });
 });
@@ -73,6 +75,18 @@ app.get("/.well-known/glama.json", (_req: Request, res: Response) => {
     $schema: "https://glama.ai/mcp/schemas/connector.json",
     maintainers: [{ email: GLAMA_MAINTAINER_EMAIL }],
   });
+});
+
+/** Public, optional mcprush domain-ownership proof; independent of gateway credentials. */
+const MCPRUSH_DOMAIN_CLAIM = process.env.MCPRUSH_DOMAIN_CLAIM ?? "";
+app.get("/.well-known/mcprush.com-claim.txt", (_req: Request, res: Response) => {
+  res.setHeader("Cache-Control", "no-store");
+  // The negative lookahead makes the end strict, including against trailing newlines.
+  if (!/^mcprush\.com-[A-Za-z0-9_-]{8,128}(?![\s\S])/.test(MCPRUSH_DOMAIN_CLAIM)) {
+    res.status(404).type("text/plain").send("Not found\n");
+    return;
+  }
+  res.type("text/plain").send(MCPRUSH_DOMAIN_CLAIM);
 });
 
 /**
@@ -116,6 +130,7 @@ function authGate(alwaysRequire: boolean) {
 // that drives a Claude connector into the OAuth sign-in flow.
 app.use("/mcp", authGate(false));
 app.use(AUTH_MCP_PATH, authGate(true));
+app.use(MCPRUSH_PATH, mcprushGate);
 
 /** Emit a 401 with the RFC 9728 challenge pointing at our Protected Resource Metadata. */
 function respondChallenge(res: Response, error?: { code: string; description: string }): void {
@@ -129,39 +144,124 @@ function respondChallenge(res: Response, error?: { code: string; description: st
 /**
  * Streamable HTTP with session management. An `initialize` POST spins up a transport +
  * server, returns a generated `Mcp-Session-Id`, and the client echoes that id on every
- * later request (POST tool calls, GET SSE stream, DELETE teardown). Sessions are dropped
- * on transport close.
+ * later request (POST tool calls, GET SSE stream, DELETE teardown).
  *
- * Note: the session map is unbounded; for a public deployment a TTL sweep would be a
- * sensible hardening follow-up.
+ * Each session holds its own McpServer (~0.6 MiB), and most clients never send DELETE
+ * (directory health probes, Claude connectors), so sessions are also closed after
+ * MCP_SESSION_IDLE_TTL_MS without a request, and the oldest idle one is evicted once
+ * MCP_MAX_SESSIONS are open. A request for a session we no longer know gets 404, which per
+ * the Streamable HTTP spec tells the client to re-initialize — the same answer clients get
+ * after a restart wipes this in-memory map.
  */
-const transports: Record<string, StreamableHTTPServerTransport> = {};
+const SESSION_IDLE_TTL_MS = envPositiveInt("MCP_SESSION_IDLE_TTL_MS", 30 * 60_000);
+const SESSION_SWEEP_INTERVAL_MS = envPositiveInt(
+  "MCP_SESSION_SWEEP_INTERVAL_MS",
+  Math.min(5 * 60_000, SESSION_IDLE_TTL_MS),
+);
+const MAX_SESSIONS = envPositiveInt("MCP_MAX_SESSIONS", 500);
+
+interface Session {
+  transport: StreamableHTTPServerTransport;
+  /** Marketplace transports cannot be reused by public routes or another installation. */
+  gatewayOwner?: string;
+  lastActivity: number;
+  /** Requests still being answered, including an open GET SSE stream; never evicted while > 0. */
+  inFlight: number;
+}
+const sessions = new Map<string, Session>();
+
+/** Count a request against its session until the response finishes or the client goes away. */
+function trackActivity(session: Session, res: Response): void {
+  session.lastActivity = Date.now();
+  session.inFlight++;
+  res.once("close", () => {
+    session.inFlight--;
+    session.lastActivity = Date.now();
+  });
+}
+
+/** Forget a session and close its transport, which releases the McpServer behind it. */
+function closeSession(sessionId: string): void {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  sessions.delete(sessionId);
+  session.transport.close().catch((err) => console.error(`Error closing MCP session ${sessionId}:`, err));
+}
+
+function sweepIdleSessions(): void {
+  const cutoff = Date.now() - SESSION_IDLE_TTL_MS;
+  let closed = 0;
+  for (const [sessionId, session] of sessions) {
+    if (session.inFlight === 0 && session.lastActivity < cutoff) {
+      closeSession(sessionId);
+      closed++;
+    }
+  }
+  if (closed > 0) console.log(`Closed ${closed} idle MCP session(s); ${sessions.size} open`);
+}
+setInterval(sweepIdleSessions, SESSION_SWEEP_INTERVAL_MS).unref();
+
+/** Make room for a new session by closing the least recently active idle one. */
+function evictForNewSession(): void {
+  if (sessions.size < MAX_SESSIONS) return;
+  let oldest: [string, Session] | undefined;
+  for (const entry of sessions) {
+    if (entry[1].inFlight === 0 && (!oldest || entry[1].lastActivity < oldest[1].lastActivity)) oldest = entry;
+  }
+  // Every session busy: let this one through over the cap rather than refuse a client.
+  if (oldest) closeSession(oldest[0]);
+}
+
+function respondSessionNotFound(res: Response): void {
+  res.status(404).json({ jsonrpc: "2.0", error: { code: -32001, message: "Session not found" }, id: null });
+}
+
+function respondMissingSession(res: Response): void {
+  res.status(400).json({
+    jsonrpc: "2.0",
+    error: { code: -32000, message: "Bad Request: no valid session ID provided" },
+    id: null,
+  });
+}
 
 async function handleMcpPost(req: Request, res: Response): Promise<void> {
-  const sessionId = req.headers["mcp-session-id"] as string | undefined;
-  let transport: StreamableHTTPServerTransport | undefined = sessionId ? transports[sessionId] : undefined;
+  const sessionId = firstHeader(req.headers["mcp-session-id"]);
+  const session = sessionId ? sessions.get(sessionId) : undefined;
+  const gatewayOwner = gatewaySessionOwner();
+  let transport: StreamableHTTPServerTransport;
 
-  if (!transport) {
-    if (sessionId || !isInitializeRequest(req.body)) {
-      res.status(400).json({
-        jsonrpc: "2.0",
-        error: { code: -32000, message: "Bad Request: no valid session ID provided" },
-        id: null,
-      });
+  if (session) {
+    if (session.gatewayOwner !== gatewayOwner) {
+      respondSessionNotFound(res);
       return;
     }
+    trackActivity(session, res);
+    transport = session.transport;
+  } else if (sessionId) {
+    respondSessionNotFound(res);
+    return;
+  } else if (!isInitializeRequest(req.body)) {
+    respondMissingSession(res);
+    return;
+  } else {
     // New initialization request — create a fresh transport + server.
-    transport = new StreamableHTTPServerTransport({
+    evictForNewSession();
+    const created = new StreamableHTTPServerTransport({
       sessionIdGenerator: () => randomUUID(),
+      enableJsonResponse: gatewayOwner !== undefined,
       onsessioninitialized: (sid) => {
-        transports[sid] = transport as StreamableHTTPServerTransport;
+        sessions.set(sid, { transport: created, gatewayOwner, lastActivity: Date.now(), inFlight: 0 });
       },
     });
-    transport.onclose = () => {
-      if (transport?.sessionId) delete transports[transport.sessionId];
+    // Set before connect(): the server wraps this handler rather than replacing it. The
+    // identity check means a sweep that already removed the session is a no-op here.
+    created.onclose = () => {
+      const sid = created.sessionId;
+      if (sid && sessions.get(sid)?.transport === created) sessions.delete(sid);
     };
-    const server = createMcpServer();
-    await server.connect(transport);
+    const server = createMcpServer({ researchOnly: gatewayOwner !== undefined });
+    await server.connect(created);
+    transport = created;
   }
 
   try {
@@ -182,16 +282,26 @@ async function handleMcpPost(req: Request, res: Response): Promise<void> {
 // not by path, so a session started on either endpoint resolves the same transport.
 app.post("/mcp", handleMcpPost);
 app.post(AUTH_MCP_PATH, handleMcpPost);
+app.post(MCPRUSH_PATH, handleMcpPost);
+app.all(MCPRUSH_PATH, (_req: Request, res: Response) => {
+  res.setHeader("Allow", "POST");
+  res.status(405).json({ error: "Marketplace transport accepts POST requests." });
+});
 
 // GET (SSE stream) and DELETE (session teardown) both require an existing session.
 async function handleSessionRequest(req: Request, res: Response): Promise<void> {
-  const sessionId = req.headers["mcp-session-id"] as string | undefined;
-  const transport = sessionId ? transports[sessionId] : undefined;
-  if (!transport) {
-    res.status(400).send("Invalid or missing session ID");
+  const sessionId = firstHeader(req.headers["mcp-session-id"]);
+  if (!sessionId) {
+    respondMissingSession(res);
     return;
   }
-  await transport.handleRequest(req, res);
+  const session = sessions.get(sessionId);
+  if (!session || session.gatewayOwner !== gatewaySessionOwner()) {
+    respondSessionNotFound(res);
+    return;
+  }
+  trackActivity(session, res);
+  await session.transport.handleRequest(req, res);
 }
 app.get("/mcp", handleSessionRequest);
 app.delete("/mcp", handleSessionRequest);
@@ -207,6 +317,7 @@ app.listen(config.port, () => {
       : `Authless mode (MCP_REQUIRE_AUTH=false): /mcp open; tokens still validated if presented`,
   );
   console.log(`Login-required endpoint at ${AUTH_MCP_PATH} -> always 401-challenges anonymous callers into OAuth login`);
+  console.log(`Marketplace research endpoint at ${MCPRUSH_PATH}: ${mcprushEnabled ? "configured" : "disabled until credentials are configured"}`);
 });
 
 function mcpUsageFromRequest(req: Request): McpUsageContext | undefined {
@@ -233,6 +344,11 @@ function mcpUsageFromRequest(req: Request): McpUsageContext | undefined {
 
 function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function envPositiveInt(name: string, fallback: number): number {
+  const value = Number(process.env[name]);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
 function firstSetValue(values: Set<string>): string | undefined {

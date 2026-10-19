@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunPost } from "../bullrun.js";
 import { getMcpUsage, runWithMcpUsage } from "./context.js";
+import { isProbeClient, PROBE_CLIENT_CLASS } from "./probes.js";
 
 export interface ToolInvocation {
   invocationId: string;
@@ -23,7 +24,8 @@ export async function recordMcpToolInvocation<T>(
   reporter: Reporter = report,
   client?: { name: string; version: string },
 ): Promise<T> {
-  const usage = { ...getMcpUsage(), toolName, invocationId: randomUUID() };
+  const usage = { ...getMcpUsage(), toolName, invocationId: randomUUID(),
+    clientClass: isProbeClient(client?.name) ? PROBE_CLIENT_CLASS : undefined };
   return runWithMcpUsage(usage, async () => {
     const started = Date.now();
     let outcome: ToolInvocation["outcome"] = "throw";

@@ -1,6 +1,6 @@
 {
   "name": "bullrun-mcp",
-  "version": "0.4.0",
+  "version": "0.7.0",
   "private": true,
   "type": "module",
   "description": "Remote MCP server exposing Bullrun market-data + portfolio tools over Streamable HTTP; an OAuth 2.1 protected resource (RFC 9728) with per-user token forwarding and an authless toggle.",
@@ -14,11 +14,19 @@
     "stdio": "node dist/stdio.js",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test scripts/test-platform-links.mjs scripts/test-invocations.mjs && node scripts/test-auth.mjs && node scripts/test-e2e.mjs && node scripts/test-authless.mjs",
+    "test": "npm run build && node --test scripts/test-platform-links.mjs scripts/test-invocations.mjs scripts/test-compare-stocks.mjs scripts/test-mcprush.mjs scripts/test-check-mcprush.mjs scripts/test-corporate-calendar.mjs scripts/test-company-exposures.mjs scripts/test-research-history-coverage.mjs scripts/test-stock-discovery.mjs scripts/test-stock-price-history-news.mjs scripts/test-release-catalog.mjs scripts/test-holding-identity.mjs scripts/test-ticker-resolution.mjs scripts/test-event-folding.mjs scripts/test-research-feeds.mjs && node scripts/test-auth.mjs && node scripts/test-e2e.mjs && node scripts/test-authless.mjs && node scripts/test-sessions.mjs",
     "test:auth": "node scripts/test-auth.mjs",
     "test:e2e": "node scripts/test-e2e.mjs",
     "test:authless": "node scripts/test-authless.mjs",
+    "test:sessions": "node scripts/test-sessions.mjs",
     "test:links": "npm run build && node --test scripts/test-platform-links.mjs",
+    "test:compare": "npm run build && node --test scripts/test-compare-stocks.mjs",
+    "test:research": "npm run build && node --test scripts/test-corporate-calendar.mjs scripts/test-company-exposures.mjs scripts/test-research-history-coverage.mjs",
+    "test:catalog": "npm run build && node --test scripts/test-release-catalog.mjs",
+    "test:feeds": "npm run build && node --test scripts/test-research-feeds.mjs",
+    "test:mcprush": "npm run build && node --test scripts/test-mcprush.mjs",
+    "check:mcprush": "node scripts/check-mcprush.mjs",
+    "test:check-mcprush": "node --test scripts/test-check-mcprush.mjs",
     "inspector": "npx -y @modelcontextprotocol/inspector"
   },
   "dependencies": {

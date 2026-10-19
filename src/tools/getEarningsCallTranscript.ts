@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { findExactStock, identityPayload, safe } from "./stockIdentity.js";
+import { findExactStock, identityPayload } from "./stockIdentity.js";
 
 interface TranscriptChunk {
   ticker: string;
@@ -50,7 +50,7 @@ export function registerGetEarningsCallTranscript(server: McpServer): void {
       title: "Get earnings call transcript",
       annotations: { readOnlyHint: true },
       description:
-        "Fetch speaker-tagged earnings-call transcript chunks for one exact Bullrun ticker, optionally filtered by fiscal period or search text. Use this for management guidance language, analyst Q&A, and qualitative judgment that is not visible in financial statements. Read-only.",
+        "Read cached earnings-call paragraphs for one exact Bullrun ticker, optionally filtered by fiscal period or search text. A best-effort free background import collects at most the two latest retained calls from DefeatBeta for supported US listings, with a 24-hour stored-data cooldown; the first read may be empty. Coverage and source publication lag vary. Speaker names and paragraph order are retained; roles and prepared/Q&A section labels may be unavailable. This is a read-only research operation.",
       inputSchema,
     },
     async (args) => {
@@ -62,12 +62,12 @@ export function registerGetEarningsCallTranscript(server: McpServer): void {
         const enc = encodeURIComponent(ticker);
         const [identity, rows] = await Promise.all([
           findExactStock(ticker),
-          safe(bullrunGet<TranscriptChunk[]>(`/api/company-intelligence/${enc}/earnings-call-transcripts`, {
+          bullrunGet<TranscriptChunk[]>(`/api/company-intelligence/${enc}/earnings-call-transcripts`, {
             fiscalYear: args.fiscalYear,
             fiscalQuarter: args.fiscalQuarter,
             q: args.search,
             limit: args.maxChunks,
-          })),
+          }),
         ]);
 
         const chunks = rows ?? [];
@@ -95,23 +95,24 @@ export function registerGetEarningsCallTranscript(server: McpServer): void {
           identity: identityPayload(identity),
           coverage: {
             chunks: chunks.length,
+            refreshPolicy: "cached read; best-effort background import of at most two retained US calls; completion is not awaited",
             requestedFiscalYear: args.fiscalYear ?? null,
             requestedFiscalQuarter: args.fiscalQuarter ?? null,
             search: args.search ?? null,
             truncatedChunks,
           },
           chunks: mapped,
-          warnings: chunks.length === 0
-            ? ["No transcript chunks found for this ticker/period/search. Populate earnings_call_transcript to answer call-language questions."]
-            : truncatedChunks > 0
-              ? [`${truncatedChunks} transcript chunks were truncated by maxCharsPerChunk; increase it for fuller text.`]
-              : [],
+          warnings: [
+            ...(chunks.length === 0 ? ["No matching transcript paragraphs are currently stored. A supported US listing may be importing in the background; other listings or older requested periods may have no source coverage. This response does not confirm refresh completion."] : []),
+            ...(chunks.length >= args.maxChunks ? ["The paragraph limit was reached; the returned transcript may be partial. Narrow the fiscal period or search, or increase maxChunks."] : []),
+            ...(truncatedChunks > 0 ? [`${truncatedChunks} transcript chunks were truncated by maxCharsPerChunk; increase it for fuller text.`] : []),
+            "Speaker roles and prepared-remarks/Q&A labels are not supplied by the configured DefeatBeta feed; OTHER is an unspecified section.",
+          ],
         };
 
         return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return { isError: true, content: [{ type: "text", text: `get_earnings_call_transcript failed: ${msg}` }] };
+      } catch {
+        return { isError: true, content: [{ type: "text", text: "Earnings-call transcripts could not be loaded. Check the exact Bullrun ticker and market-data access, then retry later; no refresh completion can be confirmed." }] };
       }
     },
   );

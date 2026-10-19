@@ -61,7 +61,6 @@ jobs:
           node-version: "20"
           cache: npm
       - run: npm ci
-      - run: npm run typecheck
-      - run: npm run build
+      - run: npm test
       - name: Assert the stdio entrypoint was emitted
         run: test -f dist/stdio.js

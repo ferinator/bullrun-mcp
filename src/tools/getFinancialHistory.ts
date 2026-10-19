@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { findExactStock, identityPayload } from "./stockIdentity.js";
+import { identityPayload, resolveStockTicker, TICKER_CONVENTION, tickerNotFoundText } from "./stockIdentity.js";
 
 interface Financials {
   ticker: string;
@@ -282,7 +282,7 @@ function sourceCurrencies(rows: HistoryRow[]): string[] {
 
 const inputSchema = {
   ticker: z.string().min(1)
-    .describe("The ticker exactly as listed on Bullrun - the native local-exchange symbol, e.g. \"AAPL\", \"BMW\" (not \"BMW.DE\"), \"ABBN\" (not \"ABBN.SW\"), \"NESN\", or a numeric code like \"005930\". Do not append Yahoo-style country suffixes; if a lookup returns nothing, use screen_stocks to find the exact symbol."),
+    .describe("The Bullrun ticker. " + TICKER_CONVENTION),
   periodType: z.enum(["annual", "quarterly", "both"]).default("both")
     .describe("Return annual rows, quarterly rows, or both. Annual rows use fiscalQuarter=0."),
   years: z.number().int().min(1).max(15).default(10)
@@ -304,14 +304,18 @@ export function registerGetFinancialHistory(server: McpServer): void {
     async (args) => {
       try {
         requirePublicScope("read:market");
-        const ticker = args.ticker.trim().toUpperCase();
+        const resolution = await resolveStockTicker(args.ticker);
+        if (!resolution.ticker) {
+          return { content: [{ type: "text" as const, text: tickerNotFoundText(args.ticker, resolution) }] };
+        }
+        const ticker = resolution.ticker;
         if (!ticker) {
           return { isError: true, content: [{ type: "text", text: "ticker is required" }] };
         }
 
         const enc = encodeURIComponent(ticker);
         const [stock, rawRows] = await Promise.all([
-          findExactStock(ticker),
+          Promise.resolve(resolution.stock),
           bullrunGet<Financials[]>(`/api/financials/${enc}`),
         ]);
 
@@ -336,6 +340,7 @@ export function registerGetFinancialHistory(server: McpServer): void {
 
         const payload = {
           ticker,
+          ...(resolution.note ? { tickerResolution: resolution.note } : {}),
           identity: identityPayload(stock),
           coverage: {
             requestedYears: args.years,

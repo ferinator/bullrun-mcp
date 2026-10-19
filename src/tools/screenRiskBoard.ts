@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { bullrunGet, type QueryParams } from "../bullrun.js";
+import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
 import { safe } from "./stockIdentity.js";
 import { toolResult } from "./etfData.js";
@@ -28,33 +28,6 @@ interface RiskBoard {
 }
 
 interface BoardSlice { name: string; companies: number; meanScore: number; meanBand: string }
-
-/**
- * The board is recomputed once a night (05:00 UTC) but bullrun-api folds the whole score
- * history on every request, which takes tens of seconds. A short in-process cache keeps a
- * conversation that pages or re-asks from re-running that query; the generous timeout keeps
- * the first call from being abandoned while the database is still working on it.
- */
-const BOARD_TIMEOUT_MS = 90_000;
-const BOARD_TTL_MS = 15 * 60_000;
-const BOARD_CACHE_MAX = 200;
-const boardCache = new Map<string, { at: number; value: Promise<unknown> }>();
-
-async function cachedBoardGet<T>(path: string, params: QueryParams): Promise<T> {
-  const key = `${path}?${JSON.stringify(params)}`;
-  const now = Date.now();
-  const hit = boardCache.get(key);
-  if (hit && now - hit.at < BOARD_TTL_MS) return hit.value as Promise<T>;
-  const value = bullrunGet<T>(path, params, BOARD_TIMEOUT_MS);
-  boardCache.set(key, { at: now, value });
-  // A failure must not be served from cache.
-  value.catch(() => boardCache.delete(key));
-  if (boardCache.size > BOARD_CACHE_MAX) {
-    const oldest = boardCache.keys().next().value;
-    if (oldest !== undefined) boardCache.delete(oldest);
-  }
-  return value;
-}
 
 const SORTS = {
   market_cap: undefined,
@@ -90,14 +63,14 @@ export function registerScreenRiskBoard(server: McpServer): void {
       title: "Screen the risk board",
       annotations: { readOnlyHint: true },
       description:
-        "Rank Bullrun's scored stock universe (~9,000 companies) by company risk: the composite risk score or any one mechanism dial (market expectation, operating pressure, cash conversion, leverage, competitive position, concentration), filtered by band, sector, country and dial coverage. Returns ticker, score, band and its meaning, direction and move since the prior reading, and the driving input per row, plus the universe band distribution and how many companies changed band at the last recompute. Use for \"which large caps have stretched leverage\", \"most concentrated supply chains in semiconductors\", \"calmest German industrials\", or \"how risky is tech vs utilities\" (includeSlices). Drill into a row with get_company_risk. A ranking of readings, not of companies to avoid. A new filter combination can take 20-60 seconds to compute; repeats within 15 minutes are instant. Read-only.",
+        "Rank Bullrun's scored stock universe (~9,000 companies) by company risk: the composite risk score or any one mechanism dial (market expectation, operating pressure, cash conversion, leverage, competitive position, concentration), filtered by band, sector, country and dial coverage. Returns ticker, score, band and its meaning, direction and move since the prior reading, and the driving input per row, plus the universe band distribution and how many companies changed band at the last recompute. Use for \"which large caps have stretched leverage\", \"most concentrated supply chains in semiconductors\", \"calmest German industrials\", or \"how risky is tech vs utilities\" (includeSlices). Drill into a row with get_company_risk. A ranking of readings, not of companies to avoid. Read-only.",
       inputSchema,
     },
     async (args) => {
       try {
         requirePublicScope("read:market");
         const [board, slices] = await Promise.all([
-          cachedBoardGet<RiskBoard>("/api/company-intelligence/risk-board", {
+          bullrunGet<RiskBoard>("/api/company-intelligence/risk-board", {
             mechanism: args.mechanism === "OVERALL" ? undefined : args.mechanism,
             band: args.bands?.length ? args.bands.join(",") : undefined,
             sector: args.sector?.trim(),
@@ -108,7 +81,7 @@ export function registerScreenRiskBoard(server: McpServer): void {
             offset: args.offset,
           }),
           args.includeSlices
-            ? safe(cachedBoardGet<{ sectors: BoardSlice[]; countries: BoardSlice[] }>(
+            ? safe(bullrunGet<{ sectors: BoardSlice[]; countries: BoardSlice[] }>(
                 "/api/company-intelligence/risk-board/slices", { minCompanies: 8, limit: 60 }))
             : Promise.resolve(null),
         ]);

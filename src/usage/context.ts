@@ -5,6 +5,8 @@ export interface McpUsageContext {
   operation?: string;
   toolName?: string;
   invocationId?: string;
+  /** "probe" for a known directory health-check client; see probes.ts. */
+  clientClass?: string;
 }
 
 const storage = new AsyncLocalStorage<McpUsageContext>();

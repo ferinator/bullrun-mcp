@@ -37,6 +37,36 @@ export function pricesAscending(
     .sort((a, b) => a.tradeDate.localeCompare(b.tradeDate));
 }
 
+/** Days a window's start may sit before its target date: the screener's 1y anchor grace. */
+const ANCHOR_GRACE_DAYS = 45;
+
+function isoDaysBefore(date: string, days: number): string {
+  return new Date(Date.parse(`${date}T00:00:00Z`) - days * 86_400_000).toISOString().slice(0, 10);
+}
+
+/**
+ * The bars of a `days`-long window ending at the newest close, starting at the last
+ * close on or before newest - `days` -- the anchor rule of the screener's return_1y_pct
+ * and the fund page, so "one year" means the same window everywhere. When history
+ * does not reach back that far (a younger listing, or a gap longer than the grace),
+ * only the bars inside the window are returned, with complete=false. `rows` must be
+ * ascending.
+ */
+export function anchoredWindow(rows: EtfPrice[], days: number): { rows: EtfPrice[]; complete: boolean } {
+  const usable = rows.filter((row) => row.closePrice != null && row.closePrice > 0);
+  const newest = usable.at(-1);
+  if (!newest) return { rows: [], complete: false };
+  const target = isoDaysBefore(newest.tradeDate, days);
+  const floor = isoDaysBefore(target, ANCHOR_GRACE_DAYS);
+  for (let i = usable.length - 1; i >= 0; i--) {
+    if (usable[i].tradeDate > target) continue;
+    return usable[i].tradeDate >= floor
+      ? { rows: usable.slice(i), complete: true }
+      : { rows: usable.slice(i + 1), complete: false };
+  }
+  return { rows: usable, complete: false };
+}
+
 export function closeReturns(rows: EtfPrice[]): DatedReturn[] {
   const out: DatedReturn[] = [];
   for (let i = 1; i < rows.length; i++) {

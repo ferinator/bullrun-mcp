@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { safe } from "./stockIdentity.js";
+import { resolveStockTicker, safe, TICKER_CONVENTION, tickerNotFoundText } from "./stockIdentity.js";
 import { mapWithConcurrency, toolResult } from "./etfData.js";
 import {
   FORECAST_CAVEAT,
@@ -20,7 +20,7 @@ const FORECAST_PREFERENCE: ModelKey[] = ["forecast", "forecast_annual_1y"];
 
 const inputSchema = {
   tickers: z.array(z.string().min(1)).min(1).max(10)
-    .describe("1-10 exact Bullrun tickers (native local-exchange symbols, e.g. [\"AAPL\",\"MSFT\"] or [\"ASML\",\"SAP\",\"NESN\"])."),
+    .describe("1-10 Bullrun tickers, e.g. [\"AAPL\",\"MSFT\"] or [\"ASML\",\"SAP\",\"NESN\"]. " + TICKER_CONVENTION),
 };
 
 export function registerGetValuationModel(server: McpServer): void {
@@ -36,13 +36,25 @@ export function registerGetValuationModel(server: McpServer): void {
     async (args) => {
       try {
         requirePublicScope("read:market");
-        const tickers = [...new Set(args.tickers.map((t) => t.trim().toUpperCase()).filter(Boolean))];
+        const requested = [...new Set(args.tickers.map((t) => t.trim().toUpperCase()).filter(Boolean))];
+        const resolutions = await mapWithConcurrency(requested, 4, (ticker) => resolveStockTicker(ticker));
+        const warnings: string[] = [];
+        const unresolved: Array<{ ticker: string; found: false; scored: false }> = [];
+        requested.forEach((ticker, i) => {
+          const resolution = resolutions[i];
+          if (!resolution.ticker) {
+            warnings.push(tickerNotFoundText(ticker, resolution));
+            unresolved.push({ ticker, found: false, scored: false });
+          } else if (resolution.note) {
+            warnings.push(resolution.note);
+          }
+        });
+        const tickers = [...new Set(resolutions.map((r) => r.ticker).filter((t): t is string => t != null))];
         const summaries = await mapWithConcurrency(tickers, 4, (ticker) =>
           safe(bullrunGet<{ results: Partial<Record<string, MlScore>> }>("/api/ml-scores/summary", { ticker, includePs: true })),
         );
 
-        const warnings: string[] = [];
-        const results = tickers.map((ticker, i) => {
+        const results: Array<Record<string, unknown>> = tickers.map((ticker, i) => {
           const scores = summaries[i]?.results ?? {};
           const keys = MODEL_KEYS.filter((k) => scores[k]);
           if (!keys.length) {
@@ -75,7 +87,7 @@ export function registerGetValuationModel(server: McpServer): void {
         });
 
         return toolResult({
-          results,
+          results: [...results, ...unresolved],
           modelCatalog: Object.fromEntries(MODEL_KEYS.map((k) => [k, MODEL_INFO[k].label])),
           methodology: { valuation: VALUATION_CAVEAT, forecast: FORECAST_CAVEAT },
           warnings,

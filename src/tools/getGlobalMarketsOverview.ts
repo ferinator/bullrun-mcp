@@ -44,6 +44,15 @@ const inputSchema = {
     .describe("Headlines to return when the news section is requested."),
 };
 
+/** Where a row's numbers come from and how fresh that source can be, from its history code. */
+function seriesCadence(historyCode: string | null | undefined): string | null {
+  if (!historyCode) return null;
+  if (historyCode.startsWith("YAHOO_")) return "Yahoo, daily";
+  if (/^DEX|^DTWEX/.test(historyCode)) return "FRED H.10, weekly release (up to ~1 week old)";
+  if (/^DCOIL|^DHHNG/.test(historyCode)) return "FRED/EIA, daily with a few days' publication lag";
+  return null;
+}
+
 export function registerGetGlobalMarketsOverview(server: McpServer): void {
   server.registerTool(
     "get_global_markets_overview",
@@ -126,16 +135,26 @@ export function registerGetGlobalMarketsOverview(server: McpServer): void {
         }
 
         if (sections.has("currencies")) {
-          out.currencies = (overview.currencies ?? []).map((c) => ({
-            pair: c.pair, rate: c.price, changePct: c.changePct, historyCode: historyCodeForCurrency(c.pair),
-          }));
+          out.currencies = (overview.currencies ?? []).map((c) => {
+            const historyCode = historyCodeForCurrency(c.pair);
+            return { pair: c.pair, rate: c.price, changePct: c.changePct, historyCode, source: seriesCadence(historyCode) };
+          });
         }
 
         if (sections.has("commodities")) {
-          out.commodities = (overview.commodities ?? []).map((c) => ({
-            name: c.name, price: c.price, changePct: c.changePct, last7Closes: trendSummary(c.trend),
-            historyCode: historyCodeForCommodity(c.name),
-          }));
+          out.commodities = (overview.commodities ?? []).map((c) => {
+            const historyCode = historyCodeForCommodity(c.name);
+            return {
+              name: c.name, price: c.price, changePct: c.changePct, last7Closes: trendSummary(c.trend),
+              historyCode, source: seriesCadence(historyCode),
+            };
+          });
+        }
+        if ((sections.has("currencies") || sections.has("commodities") || sections.has("headline"))
+            && [...((out.currencies as Array<{ source: string | null }> | undefined) ?? []),
+              ...((out.commodities as Array<{ source: string | null }> | undefined) ?? [])]
+              .some((row) => row.source?.startsWith("FRED"))) {
+          warnings.push("Rows sourced from FRED (source field) are published with a lag: the major FX pairs and the dollar index come from the weekly H.10 release and can be a week old, oil and gas a few days. Yahoo-sourced rows are daily. Do not compare a FRED row's change with a same-day move elsewhere; get_macro_history with the historyCode shows the latest observation date.");
         }
 
         if (sections.has("calendar")) {

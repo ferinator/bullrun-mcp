@@ -40,7 +40,9 @@ const STOCK_TOOLS = new Set([
 ]);
 const ETF_TOOLS = new Set(["get_etf_snapshot", "get_etf_holdings", "get_etf_timeseries", "get_etf_exposures", "get_etf_risk", "simulate_etf_cost"]);
 const LINKED_TOOLS = new Set([
-  ...STOCK_TOOLS, ...ETF_TOOLS, "screen_stocks", "screen_risk_board", "get_risk_movers", "search_etfs", "screen_etfs", "query_etfs",
+  "search_stocks", "screen_stock_presets", "find_stock_peers", "get_stock_price_history", "get_company_news",
+  "get_corporate_calendar", "compare_company_exposures", "get_company_risk_history", "get_company_data_coverage",
+  ...STOCK_TOOLS, ...ETF_TOOLS, "compare_stocks", "screen_stocks", "screen_risk_board", "get_risk_movers", "search_etfs", "screen_etfs", "query_etfs",
   "get_etf_fund", "get_etf_index_group", "get_etf_filter_options", "compare_etfs", "analyze_etf_overlap", "analyze_portfolio_fit",
   "get_global_markets_overview", "get_country_macro", "get_macro_indicators", "get_macro_history", "get_valuation_model", "screen_valuation_model",
   "list_portfolios", "get_portfolio_context", "get_portfolio_analytics", "create_portfolio_draft", "create_position_draft", "create_portfolio_from_positions",
@@ -59,6 +61,41 @@ export function continuationFor(toolName: string, args: Payload, payload: Payloa
   const link = (path: string, label: string, description: string, params?: URLSearchParams) => platformLink(toolName, path, label, description, params);
   if (payload.found === false || payload.saved === false) return null;
 
+  if (toolName === "search_stocks") {
+    const ticker = text(payload.resolvedTicker);
+    return ticker ? link(`/stocks/${encodeURIComponent(ticker)}`, `Explore ${ticker}'s company research`, "Opens the uniquely resolved listing. Ambiguous or suggested candidates are not automatically selected.") : null;
+  }
+  if (toolName === "get_stock_price_history" || toolName === "get_company_news") {
+    const ticker = tickerOf(payload, args);
+    const hasData = rows(payload[toolName === "get_stock_price_history" ? "bars" : "articles"]).length > 0;
+    return ticker && hasData ? link(`/stocks/${encodeURIComponent(ticker)}`, `Explore ${ticker}'s ${toolName === "get_company_news" ? "company news" : "price charts"}`,
+      toolName === "get_company_news" ? "Review the company's current news and supporting data. The MCP publication cutoff and article limit are not applied to this page." : "Review the company's charts and supporting data. The MCP date window, aggregation and technical-indicator settings are not applied to this page.") : null;
+  }
+  if (toolName === "find_stock_peers") {
+    const ticker = tickerOf(payload, args);
+    return ticker && rows(payload.peers).length ? link(`/stocks/${encodeURIComponent(ticker)}`, `Explore ${ticker}'s company research`, "Opens the subject company. The app does not reproduce this automatic peer selection or its comparison settings.") : null;
+  }
+
+  if (toolName === "get_corporate_calendar") {
+    const calendar = rows(payload.calendars).find(row => rows(row.events).length > 0);
+    if (!calendar) return null;
+    const tab = text(calendar.type) === "ex_dividend" ? "ex-dividend" : text(calendar.type) === "listings" ? "ipo" : "earnings";
+    return link(`/calendar/${tab}`, "Explore the company events calendar", "Opens this calendar type with the app's default search and time window. MCP filters and result limits are not applied.");
+  }
+  if (toolName === "get_company_risk_history") {
+    const ticker = tickerOf(payload, args);
+    return ticker && rows(payload.history).length ? link(`/stocks/${encodeURIComponent(ticker)}/analysis#dials`, `Explore ${ticker}'s current risk analysis`, "Opens the current risk analysis. The app does not reproduce this historical window or input-change comparison.") : null;
+  }
+  if (toolName === "get_company_data_coverage") {
+    const ticker = tickerOf(payload, args);
+    return ticker && rows(payload.datasets).length ? link(`/stocks/${encodeURIComponent(ticker)}`, `Explore ${ticker}'s company research`, "Review supporting company data and charts. The app does not reproduce this dataset-availability manifest.") : null;
+  }
+  if (toolName === "compare_company_exposures") {
+    const company = rows(payload.companies).find(row => Object.keys(record(row.subject)).length > 0);
+    const ticker = text(company?.ticker);
+    return ticker ? link(`/stocks/${encodeURIComponent(ticker)}/analysis#network`, `Explore ${ticker}'s company network`, "Opens the first covered company's network. The app does not reproduce the multi-company shared-counterparty comparison.") : null;
+  }
+
   if (STOCK_TOOLS.has(toolName)) {
     const ticker = tickerOf(payload, args);
     const hasData = Object.keys(record(payload.identity)).length > 0 || Object.keys(record(payload.subject)).length > 0
@@ -71,7 +108,7 @@ export function continuationFor(toolName: string, args: Payload, payload: Payloa
       toolName === "get_company_relationships" ? `Explore ${ticker}'s company network` : analysis ? `Explore ${ticker}'s risk analysis` : `Explore ${ticker}'s company research`,
       toolName === "get_company_relationships" ? "Explore relationships, evidence and dependence in the interactive company network." : "Continue researching this company with Bullrun's charts and supporting data.");
   }
-  if (toolName === "screen_stocks") {
+  if (toolName === "screen_stocks" || toolName === "screen_stock_presets" && payload.action === "run") {
     const query = record(payload.query);
     const filter = {
       version: 1, rules: query.rules ?? [], lookbackMode: query.lookbackMode ?? "annual", lookback: query.lookback ?? 3,
@@ -109,13 +146,15 @@ export function continuationFor(toolName: string, args: Payload, payload: Payloa
     return isin ? link(`/etfs/isin/${encodeURIComponent(isin)}`, "Explore this fund and its trading venues", "Compare the available listings of the same fund and review its profile.") : null;
   }
   if (toolName === "get_etf_index_group" && text(payload.indexKey)) return link(`/etfs/index/${encodeURIComponent(text(payload.indexKey))}`, "Compare funds tracking this index", "Opens the app's UCITS index comparison. Tool-specific scope and distribution-policy filters are not carried over.");
-  if (["compare_etfs", "analyze_etf_overlap", "get_valuation_model"].includes(toolName)) {
+  if (["compare_stocks", "compare_etfs", "analyze_etf_overlap", "get_valuation_model"].includes(toolName)) {
     const covered = toolName === "get_valuation_model"
       ? rows(payload.results).filter(row => row.scored === true)
+      : toolName === "compare_stocks"
+      ? rows(payload.coverage).filter(row => row.identityAvailable === true && (!row.quoteType || row.quoteType === "EQUITY"))
       : rows(payload.coverage).filter(row => row.identityAvailable === true || row.profileAvailable === true || count(row.priceRows) > 0 || count(row.holdingRows) > 0 || count(row.storedRows) > 0);
     const tickers = covered.map(row => text(row.ticker)).filter(Boolean);
     if (!tickers.length) return null;
-    if (tickers.length === 1) return link(`/${toolName === "get_valuation_model" ? "stocks" : "etfs"}/${encodeURIComponent(tickers[0])}`, `Explore ${tickers[0]}'s research`, "Review the instrument's charts and supporting data.");
+    if (tickers.length === 1) return link(`/${toolName === "get_valuation_model" || toolName === "compare_stocks" ? "stocks" : "etfs"}/${encodeURIComponent(tickers[0])}`, `Explore ${tickers[0]}'s research`, "Review the instrument's charts and supporting data.");
     return link(`/compare/${tickers.slice(0, 4).map(t => encodeURIComponent(t.toLowerCase())).join("-vs-")}`, tickers.length > 4 ? "Compare the first four covered instruments" : "Explore this comparison", `Compare profiles and charts side by side.${tickers.length > 4 ? " The app supports four instruments per comparison." : ""} Tool-specific analytical settings are not carried over.`);
   }
   if (toolName === "query_etfs" && record(payload.detail).identity != null) {

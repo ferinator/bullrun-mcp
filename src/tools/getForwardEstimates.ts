@@ -65,21 +65,30 @@ function latestPerPeriod(rows: ForwardEstimate[]): ForwardEstimate[] {
   return out;
 }
 
-function derivedValuation(rows: ForwardEstimate[], latestClose: number | null): Record<string, unknown> {
-  const annual = latestPerPeriod(rows)
-    .filter((row) => row.periodType === "ANNUAL" && row.epsAvg != null && row.epsAvg > 0)
+function derivedValuation(rows: ForwardEstimate[], latestClose: number | null, quoteCurrency: string | null): Record<string, unknown> {
+  const candidates = latestPerPeriod(rows)
+    .filter((row) => row.periodType === "ANNUAL");
+  const latestSnapshot = candidates.map((row) => row.asOfDate).sort().at(-1);
+  const annual = candidates.filter((row) => row.asOfDate === latestSnapshot)
     .sort((a, b) => a.fiscalYear - b.fiscalYear);
 
   const next = annual[0] ?? null;
-  const following = annual[1] ?? null;
-  const forwardPe = next && latestClose != null ? round2(latestClose / next.epsAvg!) : null;
+  const following = next ? annual.find((row) => row.fiscalYear === next.fiscalYear + 1) ?? null : null;
+  const comparableCurrency = !!quoteCurrency && !!next?.sourceCurrency
+    && quoteCurrency.toUpperCase() === next.sourceCurrency.toUpperCase();
+  const forwardPe = next && next.epsAvg != null && next.epsAvg > 0 && latestClose != null && comparableCurrency
+    ? round2(latestClose / next.epsAvg) : null;
   const epsGrowthPct =
-    next && following && next.epsAvg != null && following.epsAvg != null
+    next && following && next.epsAvg != null && next.epsAvg > 0 && following.epsAvg != null
+      && next.sourceCurrency != null && next.sourceCurrency === following.sourceCurrency
       ? round2(((following.epsAvg - next.epsAvg) / Math.abs(next.epsAvg)) * 100)
       : null;
 
   return {
     latestClose,
+    quoteCurrency,
+    estimateCurrency: next?.sourceCurrency ?? null,
+    valuationNote: comparableCurrency ? null : "Forward P/E is omitted unless quote and estimate currency units match; no currency conversion is assumed.",
     forwardPe,
     forwardPeBasis: next
       ? { period: periodLabel(next), epsAvg: next.epsAvg, asOfDate: next.asOfDate, source: next.source }
@@ -105,7 +114,7 @@ export function registerGetForwardEstimates(server: McpServer): void {
       title: "Get forward estimates",
       annotations: { readOnlyHint: true },
       description:
-        "Fetch forward consensus revenue/EPS/EBITDA estimates, management guidance ranges, and estimate-revision percentages for one exact Bullrun ticker. Also derives simple forward P/E and PEG-style context from the latest close when EPS estimates are available. Read-only.",
+        "Read cached Yahoo analyst consensus revenue/EPS estimates and available EPS revision percentages for one exact Bullrun ticker. A free background refresh checks supported symbols on demand, storing at most one snapshot per day; the first read may be empty. Fiscal periods and source currency are preserved. The configured feed does not provide EBITDA estimates, management guidance or revenue revisions. Forward P/E/PEG context uses the latest annual consensus snapshot only when quote and EPS currency units match. Read-only research operation.",
       inputSchema,
     },
     async (args) => {
@@ -118,10 +127,10 @@ export function registerGetForwardEstimates(server: McpServer): void {
         const periodType = args.periodType === "both" ? undefined : args.periodType.toUpperCase();
         const [identity, rows, prices] = await Promise.all([
           findExactStock(ticker),
-          safe(bullrunGet<ForwardEstimate[]>(`/api/company-intelligence/${enc}/forward-estimates`, {
+          bullrunGet<ForwardEstimate[]>(`/api/company-intelligence/${enc}/forward-estimates`, {
             periodType,
             limit: args.limit,
-          })),
+          }),
           safe(bullrunGet<Price[]>(`/api/prices/${enc}`, { limit: 1 })),
         ]);
 
@@ -132,6 +141,7 @@ export function registerGetForwardEstimates(server: McpServer): void {
           identity: identityPayload(identity),
           coverage: {
             rows: estimates.length,
+            refreshPolicy: "cached read; best-effort free background refresh, with daily stored snapshot cooldown; completion is not awaited",
             requestedPeriodType: args.periodType,
             hasConsensus: estimates.some((row) => row.revenueAvg != null || row.epsAvg != null),
             hasGuidance: estimates.some((row) =>
@@ -147,17 +157,17 @@ export function registerGetForwardEstimates(server: McpServer): void {
               row.epsRevision30dPct != null ||
               row.epsRevision90dPct != null),
           },
-          derived: derivedValuation(estimates, latestClose),
+          derived: derivedValuation(estimates, latestClose, identity?.currency ?? null),
           estimates: estimates.map((row) => ({ ...row, period: periodLabel(row) })),
-          warnings: estimates.length === 0
-            ? ["No forward estimate rows found for this ticker. The MCP contract exists, but the upstream feed/crawler has not populated it yet."]
-            : [],
+          warnings: [
+            ...(estimates.length === 0 ? ["No consensus rows are currently stored for this ticker/filter. A free refresh may be running in the background, or Yahoo may have no coverage; this response does not confirm completion."] : []),
+            "Yahoo consensus is an aggregated analyst estimate, not issuer guidance or a verified forecast. Missing values are unavailable; EBITDA, management guidance and revenue revisions are not populated by this feed.",
+          ],
         };
 
         return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return { isError: true, content: [{ type: "text", text: `get_forward_estimates failed: ${msg}` }] };
+      } catch {
+        return { isError: true, content: [{ type: "text", text: "Forward estimates could not be loaded. Check the exact Bullrun ticker and market-data access, then retry later; no refresh completion can be confirmed." }] };
       }
     },
   );
