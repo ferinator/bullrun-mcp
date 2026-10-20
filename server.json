@@ -1,9 +1,17 @@
 {
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "org.bull-run/bullrun",
-  "title": "Bullrun",
-  "description": "Global stocks, ML valuation, UCITS ETF costs and company risks. Free public research; no API key.",
-  "version": "0.8.0",
+  "title": "Bullrun: Global Stock & UCITS ETF Research",
+  "description": "Free, no sign-up: global stocks, UCITS ETF costs and overlap, company risk and macro, all dated.",
+  "version": "0.8.1",
+  "websiteUrl": "https://bull-run.org/mcp",
+  "icons": [
+    {
+      "src": "https://bull-run.org/bullrun-icon.png",
+      "mimeType": "image/png",
+      "sizes": ["384x384"]
+    }
+  ],
   "repository": {
     "url": "https://github.com/ferinator/bullrun-mcp",
     "source": "github"

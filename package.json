@@ -1,6 +1,6 @@
 {
   "name": "bullrun-mcp",
-  "version": "0.8.0",
+  "version": "0.8.1",
   "private": true,
   "type": "module",
   "description": "Find global stock candidates, compare UCITS ETF costs and overlap, and inspect company risks. Free public research; OAuth for saved research and portfolios.",

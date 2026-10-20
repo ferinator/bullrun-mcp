@@ -3,8 +3,8 @@
   "maintainers": [
     "ferinator"
   ],
-  "name": "Bullrun",
-  "description": "Research global stocks with ML valuation context, compare UCITS ETF costs and overlap, and inspect company dependencies. Public research needs no account or API key. Connect a free Bullrun account to save research and review portfolios. Coverage and dates are explicit.",
+  "name": "Bullrun: Global Stock & UCITS ETF Research",
+  "description": "Global stock and UCITS ETF research without an API key: company search by name, ticker or ISIN, stock and ETF screens, financial history, daily prices and technicals, dated company news, ETF costs, holdings and overlap, company risk and relationships, and global macro. Every figure carries its date and currency. Connect a free Bullrun account to save research and review portfolios.",
   "type": "mcp_server",
   "status": "beta",
   "transport": [
@@ -14,12 +14,18 @@
   "keywords": [
     "finance",
     "stocks",
+    "stock-research",
+    "stock-screener",
     "screening",
+    "financial-data",
+    "fundamentals",
+    "european-stocks",
     "price-history",
     "technicals",
     "news",
     "etf",
     "ucits",
+    "etf-overlap",
     "isin",
     "portfolio",
     "risk",

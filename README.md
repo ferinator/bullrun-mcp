@@ -1,6 +1,6 @@
-# Bullrun MCP
+# Bullrun: Global Stock & UCITS ETF Research
 
-Find global stock candidates, compare UCITS ETF costs and overlap, and inspect company risks from your MCP client. **Public research needs no API key or Bullrun account.** Connect your free Bullrun account when you want to save research, read your portfolios or create a reviewable paper-portfolio draft.
+An MCP server for researching stocks and ETFs beyond the US. Find global stock candidates, compare UCITS ETF costs and overlap, and inspect company risks from your MCP client. Every figure shows its date, reporting period and native currency, and missing data is reported as unknown. **Public research needs no API key or Bullrun account.** Connect your free Bullrun account when you want to save research, read your portfolios or create a reviewable paper-portfolio draft.
 
 [![Bullrun MCP server](https://mcprush.com/badge/bullrun-mcp/card.svg)](https://mcprush.com/to/bullrun-mcp?ref=badge) [![Bullrun Research MCP server](https://mcprush.com/badge/bullrun-research-mcp/card.svg)](https://mcprush.com/to/bullrun-research-mcp?ref=badge)
 
@@ -43,7 +43,7 @@ Use the prompt menu for `find_ml_candidates` (compare model candidates with busi
 
 ## Tools
 
-Version 0.8.0 exposes 48 focused tools in both hosted and local builds (39 research tools on the marketplace connection). The exact tools and parameters are available through MCP `tools/list`.
+Version 0.8.1 exposes 48 focused tools in both hosted and local builds (39 research tools on the marketplace connection). The exact tools and parameters are available through MCP `tools/list`.
 
 | Workflow | Tools |
 | --- | --- |
