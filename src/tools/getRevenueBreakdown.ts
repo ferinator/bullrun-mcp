@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { identityPayload, resolveStockTicker, safe, TICKER_CONVENTION, tickerNotFoundText } from "./stockIdentity.js";
+import { identityPayload, resolveStockTicker, storedRead, TICKER_CONVENTION, tickerNotFoundText } from "./stockIdentity.js";
 
 interface RevenueBreakdown {
   ticker: string;
@@ -81,10 +81,11 @@ export function registerGetRevenueBreakdown(server: McpServer): void {
         const dimension = args.dimension === "all" ? undefined : args.dimension.toUpperCase();
         const [identity, rows] = await Promise.all([
           Promise.resolve(resolution.stock),
-          safe(bullrunGet<RevenueBreakdown[]>(`/api/company-intelligence/${enc}/revenue-breakdown`, {
+          // A failed read throws: a 429 is not "no revenue breakdown rows found".
+          storedRead(bullrunGet<RevenueBreakdown[]>(`/api/company-intelligence/${enc}/revenue-breakdown`, {
             dimension,
             limit: args.limit,
-          })),
+          }), "The revenue breakdown"),
         ]);
 
         const breakdown = rows ?? [];

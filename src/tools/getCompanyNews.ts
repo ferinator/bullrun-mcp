@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { findExactStock, identityPayload, safe } from "./stockIdentity.js";
+import { errorText, identityPayload, resolveStockTicker, safe, TICKER_CONVENTION, tickerNotFoundText } from "./stockIdentity.js";
 import { toolResult } from "./etfData.js";
 import { newsCutoff, newsInstant, selectCompanyNews } from "./companyNewsData.js";
 
@@ -22,7 +22,7 @@ export function registerGetCompanyNews(server: McpServer): void {
     annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
     description: "Get cached company news for one exact Bullrun ticker, newest publication first, with publisher, source URL, publication date and stored-fetch freshness when recorded. Optional since cutoff and limit up to 50; only the newest 50 stored articles are searched. Useful for company headlines and article sources; use get_corporate_calendar for scheduled earnings/dividends and get_earnings_call_transcript for call text. Reading news also registers demand and requests a best-effort background cache refresh; this response does not wait for or confirm a refresh. Cached/empty/stale results do not establish that no new events exist. Does not change portfolios or place trades.",
     inputSchema: {
-      ticker: z.string().trim().min(1).max(32).describe("Exact native Bullrun company ticker, e.g. AAPL, SAP or ABBN. Resolve the symbol with search_stocks first if uncertain."),
+      ticker: z.string().trim().min(1).max(32).describe("Bullrun company ticker, e.g. AAPL, SAP, ABBN or 6324.T. " + TICKER_CONVENTION),
       since: z.string().refine(value => newsCutoff(value) != null, "Use a real YYYY-MM-DD date or an ISO timestamp with seconds and explicit Z/UTC offset.").optional()
         .describe("Inclusive publication-time cutoff. YYYY-MM-DD means midnight UTC; timestamps need an explicit Z or UTC offset. Applied to the newest 50 stored articles, not a full historical news archive."),
       limit: z.number().int().min(1).max(50).default(20).describe("Maximum returned articles, newest publication first. Up to 50 cached source articles are read before cutoff filtering."),
@@ -31,9 +31,11 @@ export function registerGetCompanyNews(server: McpServer): void {
     try { requirePublicScope("read:market"); }
     catch { return { isError: true, content: [{ type: "text", text: 'get_company_news requires the "read:market" scope.' }] }; }
     try {
-      const ticker = rawTicker.toUpperCase();
-      const identity = await findExactStock(ticker);
-      if (!identity) return { isError: true, content: [{ type: "text", text: "No exact Bullrun stock identity was found. Use search_stocks to resolve its native ticker before requesting news." }] };
+      // An unresolved ticker never reaches the news endpoint, which would register demand for it.
+      const resolution = await resolveStockTicker(rawTicker);
+      if (!resolution.ticker || !resolution.stock) return { isError: true, content: [{ type: "text", text: tickerNotFoundText(rawTicker, resolution) }] };
+      const ticker = resolution.ticker.toUpperCase();
+      const identity = resolution.stock;
       const enc = encodeURIComponent(ticker);
       const [raw, manifest] = await Promise.all([
         bullrunGet<unknown>(`/api/stocks/${enc}/news`, { limit: NEWS_SOURCE_LIMIT }, 8_000),
@@ -58,7 +60,8 @@ export function registerGetCompanyNews(server: McpServer): void {
       if (selected.articles.some(row => row.textTruncated)) warnings.push("Long headline/summary snippets were truncated; follow the source URL for the original article.");
       if (selected.articles.some(row => !row.source || !row.url)) warnings.push("Some stored articles have no usable publisher or source URL; those source fields remain null.");
       return toolResult({
-        ticker, identity: identityPayload(identity), status: selected.articles.length ? "available" : "no_matching_stored_articles",
+        ticker, ...(resolution.note ? { tickerResolution: resolution.note } : {}),
+        identity: identityPayload(identity), status: selected.articles.length ? "available" : "no_matching_stored_articles",
         articles: selected.articles,
         coverage: { sourceArticleLimit: NEWS_SOURCE_LIMIT, requestedLimit: limit, since: cutoff,
           loadedRows: Math.min(raw.length, NEWS_SOURCE_LIMIT), usableLoadedArticles: selected.loadedUsableArticles,
@@ -78,8 +81,9 @@ export function registerGetCompanyNews(server: McpServer): void {
         },
         warnings,
       });
-    } catch {
-      return { isError: true, content: [{ type: "text", text: "Company news could not be loaded. Check the exact Bullrun ticker and retry later; no refresh completion can be confirmed." }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: errorText(err, "Company news",
+        "Company news could not be loaded. Check the exact Bullrun ticker and retry later; no refresh completion can be confirmed.") }] };
     }
   });
 }

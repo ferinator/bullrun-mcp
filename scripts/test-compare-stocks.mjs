@@ -225,10 +225,13 @@ test("quarterly-only, unknown and wrong-identity tickers preserve explicit missi
     assert.equal(partial.structuredContent.rows[1].status, "unavailable");
     assert.equal(partial.isError, true, "identity and quarterly rows alone cannot satisfy annual quality research");
     assert.ok(partial.structuredContent.warnings.some(warning => /quarterly rows were not substituted/.test(warning)));
+    // GET /api/stocks/AAA answering with AAAA's row is how the API reports a retired
+    // ticker: the comparison follows the survivor and says so.
     reset("wrong-identity");
-    const wrong = await client.callTool({ name: "compare_stocks", arguments: { tickers: ["AAA", "BBB"], include: ["quality"] } });
-    assert.equal(wrong.structuredContent.rows[0].identity, null);
-    assert.equal(wrong.structuredContent.coverage[0].identityAvailable, false);
+    const renamed = await client.callTool({ name: "compare_stocks", arguments: { tickers: ["AAA", "BBB"], include: ["quality"] } });
+    assert.deepEqual(renamed.structuredContent.tickers, ["AAAA", "BBB"]);
+    assert.equal(renamed.structuredContent.coverage[0].identityAvailable, true);
+    assert.ok(renamed.structuredContent.warnings.some(warning => /AAA is a retired ticker; its listing is now AAAA/.test(warning)));
     reset("etf");
     const etf = await client.callTool({ name: "compare_stocks", arguments: { tickers: ["AAA", "BBB"], include: ["quality"] } });
     assert.equal(etf.structuredContent.rows[0].status, "unsupported_instrument");

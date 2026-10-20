@@ -4,10 +4,13 @@
  * Mashable, moomoo, Reuters, BBC) under headlines with little wording in common,
  * and read as five recalls.
  *
- * A report is folded into a story when, of the same event type and found in the same
- * crawl as the story's first report, its headline shares two topical words with that
- * headline (china + door),
- * or one plus at least four words of text that are rare among the company's events.
+ * Reports found within three days share topical headline words (china + door),
+ * or a rare subject plus supporting text. A shared investigation headline kind
+ * (probe, inquiry) can support a single rare headline subject; when the subject
+ * appears only in the other report's summary, another rare shared detail is needed.
+ * Safety and legal classifications may disagree on investigations; those two types
+ * may fold when both headlines describe an investigation. The representative keeps
+ * its original type.
  * Generic newsroom words (investigation, recall, regulators, lawsuit, faces) are
  * never topical, and a report is compared with the story's first report only, never
  * with whatever joined it: matching any member chained Apple's UK App Store suit,
@@ -54,6 +57,21 @@ const GENERIC = new Set([
   "staff", "team", "teams", "role", "roles",
 ]);
 
+/** Investigation words support a subject match, never provide a topical anchor. */
+const INVESTIGATION_WORDS = new Set([
+  "investigation", "investigate", "investigates", "investigating", "investigated",
+  "probe", "probing", "probed", "inquiry",
+]);
+
+// tokens() singularizes words; exclude every investigation form from topical evidence.
+for (const word of INVESTIGATION_WORDS) {
+  GENERIC.add(word.length > 4 && word.endsWith("s") && !word.endsWith("ss") ? word.slice(0, -1) : word);
+}
+
+function isInvestigation(headline: string | null): boolean {
+  return (headline ?? "").toLowerCase().split(/[^a-z]+/).some((word) => INVESTIGATION_WORDS.has(word));
+}
+
 /** Same crawl: reports of one story are found together. */
 const SAME_STORY_DAYS = 3;
 
@@ -79,6 +97,7 @@ interface Report {
   words: Set<string>;
   /** Topical words of the headline: what the story is about. */
   anchors: Set<string>;
+  investigation: boolean;
 }
 
 /**
@@ -90,6 +109,7 @@ export function foldDuplicateEvents<T extends FoldableEvent>(rows: T[], companyN
   const reports: Report[] = rows.map((row) => ({
     words: new Set([...tokens(row.headline, companyWords), ...tokens(row.summary, companyWords)]),
     anchors: new Set(tokens(row.headline, companyWords).filter((word) => !GENERIC.has(word))),
+    investigation: isInvestigation(row.headline),
   }));
   const documentFrequency = new Map<string, number>();
   for (const { words } of reports) for (const word of words) documentFrequency.set(word, (documentFrequency.get(word) ?? 0) + 1);
@@ -97,19 +117,32 @@ export function foldDuplicateEvents<T extends FoldableEvent>(rows: T[], companyN
   // tells. The floor matters when one story dominates a short list: its five reports
   // all say "china", which is what they have in common, not noise.
   const rareLimit = Math.max(5, Math.floor(rows.length * 0.4));
+  const isRare = (word: string): boolean => (documentFrequency.get(word) ?? 0) <= rareLimit;
 
   const sameStory = (first: number, candidate: number): boolean => {
-    if (rows[first].eventType !== rows[candidate].eventType) return false;
     if (daysApart(rows[first].discoveredAt, rows[candidate].discoveredAt) > SAME_STORY_DAYS) return false;
-    let anchors = 0;
-    for (const word of reports[first].anchors) if (reports[candidate].anchors.has(word)) anchors++;
-    if (anchors >= 2) return true;
-    if (anchors === 0) return false;
-    let rare = 0;
-    for (const word of reports[first].words) {
-      if (reports[candidate].words.has(word) && !GENERIC.has(word) && (documentFrequency.get(word) ?? 0) <= rareLimit) rare++;
+    const a = reports[first], b = reports[candidate];
+    const bothInvestigations = a.investigation && b.investigation;
+    if (rows[first].eventType !== rows[candidate].eventType) {
+      const types = new Set([rows[first].eventType, rows[candidate].eventType]);
+      if (!types.has("RECALL_SAFETY") || !types.has("REGULATORY_LEGAL") || !bothInvestigations) return false;
     }
-    return rare >= 4;
+    const headlineAnchors = [...a.anchors].filter((word) => b.anchors.has(word));
+    if (headlineAnchors.length >= 2) return true;
+    if (bothInvestigations && headlineAnchors.some(isRare)) return true;
+    // Yahoo's headline says "no steering wheel", but its summary names Cybercab.
+    // Require rare topical evidence from at least one headline, in either direction.
+    const anchors = new Set(headlineAnchors);
+    if (bothInvestigations) {
+      for (const word of a.anchors) if (b.words.has(word) && isRare(word)) anchors.add(word);
+      for (const word of b.anchors) if (a.words.has(word) && isRare(word)) anchors.add(word);
+    }
+    if (anchors.size === 0) return false;
+    let rare = 0;
+    for (const word of a.words) {
+      if (b.words.has(word) && !GENERIC.has(word) && isRare(word)) rare++;
+    }
+    return rare >= 4 || (bothInvestigations && rare >= 2 && [...anchors].some(isRare));
   };
 
   const stories: Array<{ first: number; folded: FoldedEvent<T> }> = [];

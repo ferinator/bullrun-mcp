@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { findExactStock, identityPayload, safe } from "./stockIdentity.js";
+import { errorText, failureText, identityPayload, resolveStockTicker, settle, TICKER_CONVENTION, tickerNotFoundText } from "./stockIdentity.js";
 
 interface ForwardEstimate {
   ticker: string;
@@ -100,7 +100,7 @@ function derivedValuation(rows: ForwardEstimate[], latestClose: number | null, q
 
 const inputSchema = {
   ticker: z.string().min(1)
-    .describe("The ticker exactly as listed on Bullrun, e.g. \"AAPL\", \"CRWD\", \"SPGI\"."),
+    .describe("Bullrun ticker, e.g. \"AAPL\", \"CRWD\", \"SPGI\". " + TICKER_CONVENTION),
   periodType: z.enum(["annual", "quarterly", "both"]).default("both")
     .describe("Return annual estimates, quarterly estimates, or both."),
   limit: z.number().int().min(1).max(200).default(80)
@@ -120,24 +120,27 @@ export function registerGetForwardEstimates(server: McpServer): void {
     async (args) => {
       try {
         requirePublicScope("read:market");
-        const ticker = args.ticker.trim().toUpperCase();
-        if (!ticker) return { isError: true, content: [{ type: "text", text: "ticker is required" }] };
+        if (!args.ticker.trim()) return { isError: true, content: [{ type: "text", text: "ticker is required" }] };
+        const resolution = await resolveStockTicker(args.ticker);
+        if (!resolution.ticker) return { content: [{ type: "text", text: tickerNotFoundText(args.ticker, resolution) }] };
+        const ticker = resolution.ticker.toUpperCase();
+        const identity = resolution.stock;
 
         const enc = encodeURIComponent(ticker);
         const periodType = args.periodType === "both" ? undefined : args.periodType.toUpperCase();
-        const [identity, rows, prices] = await Promise.all([
-          findExactStock(ticker),
+        const [rows, prices] = await Promise.all([
           bullrunGet<ForwardEstimate[]>(`/api/company-intelligence/${enc}/forward-estimates`, {
             periodType,
             limit: args.limit,
           }),
-          safe(bullrunGet<Price[]>(`/api/prices/${enc}`, { limit: 1 })),
+          settle(bullrunGet<Price[]>(`/api/prices/${enc}`, { limit: 1 })),
         ]);
 
         const estimates = rows ?? [];
-        const latestClose = prices?.[0]?.closePrice ?? null;
+        const latestClose = prices.data?.[0]?.closePrice ?? null;
         const payload = {
           ticker,
+          ...(resolution.note ? { tickerResolution: resolution.note } : {}),
           identity: identityPayload(identity),
           coverage: {
             rows: estimates.length,
@@ -161,13 +164,15 @@ export function registerGetForwardEstimates(server: McpServer): void {
           estimates: estimates.map((row) => ({ ...row, period: periodLabel(row) })),
           warnings: [
             ...(estimates.length === 0 ? ["No consensus rows are currently stored for this ticker/filter. A free refresh may be running in the background, or Yahoo may have no coverage; this response does not confirm completion."] : []),
+            ...(prices.failure ? [`${failureText("The latest price", prices.failure)} Forward P/E and PEG are null for that reason only.`] : []),
             "Yahoo consensus is an aggregated analyst estimate, not issuer guidance or a verified forecast. Missing values are unavailable; EBITDA, management guidance and revenue revisions are not populated by this feed.",
           ],
         };
 
         return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
-      } catch {
-        return { isError: true, content: [{ type: "text", text: "Forward estimates could not be loaded. Check the exact Bullrun ticker and market-data access, then retry later; no refresh completion can be confirmed." }] };
+      } catch (err) {
+        return { isError: true, content: [{ type: "text", text: errorText(err, "Forward estimates",
+          "Forward estimates could not be loaded. Check the exact Bullrun ticker and market-data access, then retry later; no refresh completion can be confirmed.") }] };
       }
     },
   );

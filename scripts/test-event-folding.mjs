@@ -1,6 +1,7 @@
 // One story from several outlets is one event; different stories stay apart.
-// Headlines are the real ones stored for TSLA and AAPL on 2026-10-19; summaries are
-// shortened but keep the words that matter.
+// Headlines are the real ones stored for TSLA and AAPL; summaries are shortened
+// but keep the words that matter. Additional minimal pairs protect the evidence
+// required to fold reports with different headlines or classifications.
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { foldDuplicateEvents } from "../dist/tools/eventFolding.js";
@@ -54,4 +55,138 @@ test("reports found in different crawls are not folded", () => {
     "Tesla's door release recall in China, issued with the State Administration for Market Regulation.", "2026-10-15T08:00:00Z");
   const folded = foldDuplicateEvents([tesla[0], later], "Tesla, Inc.");
   assert.equal(folded.length, 2);
+});
+
+// Production events 579–581, diagnosed on 2026-10-20. Yahoo names Cybercab only
+// in its summary; Ars has a different eventType from the two other outlets.
+const cybercab = [
+  {
+    id: 579, eventType: "REGULATORY_LEGAL",
+    headline: "Federal Regulators Open Investigation After Tesla Launches Car With No Steering Wheel",
+    summary: "Context on the broader regulatory backdrop is covered in our companion piece, Tesla Falls 3% as Cybercab Launch Leaves Deployment Questions Unanswered, according to 24/7 Wall St.. Tesla also has at least two other active NHTSA investigations into its self-driving systems, covering at least nine documented crashes including a fatal pedestrian collision, plus scrutiny over allegedly slow crash reporting.",
+    sourceUrl: "https://finance.yahoo.com/technology/articles/federal-regulators-open-investigation-tesla-142100471.html",
+    discoveredAt: "2026-09-06T14:17:56.801406+02:00", publishedAt: null, severity: "WATCH",
+  },
+  {
+    id: 580, eventType: "RECALL_SAFETY",
+    headline: "Tesla’s Cybercab has been deployed, and it’s already under investigation",
+    summary: "The investigation, called an Audit Query, will examine the data and process that Tesla used to make that determination, according to a government filing. In a statement, NHTSA Administrator Jonathan Morrison said his agency fully supports the safe development and deployment of automated vehicles.",
+    sourceUrl: "https://arstechnica.com/cars/2026/09/teslas-cybercab-has-been-deployed-and-its-already-under-investigation",
+    discoveredAt: "2026-09-06T14:17:56.804163+02:00", publishedAt: null, severity: "HIGH",
+  },
+  {
+    id: 581, eventType: "REGULATORY_LEGAL",
+    headline: "NHTSA Opens Probe Into Tesla's Cybercab Rollout",
+    summary: "Mounted police watch as a Tesla Cybercab drives by during the Robotaxi launch event in Austin, Texas. Federal regulators have opened an investigation into Tesla and the company’s steering-wheel-free Cybercab to determine whether it complies with safety standards. Tesla launched the Cybercab, a two-seater gold coupe without pedals or mirrors, saying Thursday that customers in Austin, Texas can book rides through its Robotaxi ride-hailing app.",
+    sourceUrl: "https://www.wsj.com/business/autos/nhtsa-opens-probe-into-teslas-cybercab-rollout-06aa6eac",
+    discoveredAt: "2026-09-06T14:17:56.805726+02:00", publishedAt: null, severity: "WATCH",
+  },
+];
+
+test("the Cybercab investigation folds in all six orders and preserves every report", () => {
+  for (const order of [[0, 1, 2], [0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1], [2, 1, 0]]) {
+    const input = order.map((index) => cybercab[index]);
+    const before = structuredClone(input);
+    const folded = foldDuplicateEvents(input, "Tesla, Inc.");
+    assert.equal(folded.length, 1, `order ${order}`);
+    assert.strictEqual(folded[0].event, input[0]);
+    assert.equal(folded[0].event.eventType, before[0].eventType);
+    assert.deepEqual(folded[0].alsoReportedAs, input.slice(1).map(({ headline, sourceUrl }) => ({ headline, sourceUrl })));
+    assert.deepEqual(input, before);
+  }
+});
+
+test("one rare headline subject supports matching investigation kinds", () => {
+  const input = [
+    ev("REGULATORY_LEGAL", "Tesla Cybercab probe", null),
+    ev("REGULATORY_LEGAL", "Tesla Cybercab inquiry", null),
+  ];
+  assert.equal(foldDuplicateEvents(input, "Tesla, Inc.").length, 1);
+});
+
+test("cross-classification folding requires the safety/legal pair and investigation headlines", () => {
+  const pairs = [
+    [ev("RECALL_SAFETY", "Tesla Cybercab steering recall", null),
+      ev("REGULATORY_LEGAL", "Tesla Cybercab steering lawsuit", null)],
+    [ev("RECALL_SAFETY", "Tesla Cybercab steering recall", null),
+      ev("REGULATORY_LEGAL", "Tesla Cybercab steering recall", null)],
+    [cybercab[1], { ...cybercab[2], eventType: "PARTNERSHIP" }],
+    [ev("RECALL_SAFETY", "Tesla Cybercab steering decision", "Federal investigation"),
+      ev("REGULATORY_LEGAL", "Tesla Cybercab steering decision", "Federal investigation")],
+  ];
+  for (const pair of pairs) {
+    assert.equal(foldDuplicateEvents(pair, "Tesla, Inc.").length, 2, pair.map((e) => e.headline).join(" / "));
+  }
+});
+
+test("matching summaries cannot replace topical evidence from a headline", () => {
+  const summary = "Cybercab deployment steering wheel Austin";
+  const input = [
+    ev("REGULATORY_LEGAL", "Tesla under investigation", summary),
+    ev("REGULATORY_LEGAL", "Federal regulators open probe into Tesla", summary),
+  ];
+  assert.equal(foldDuplicateEvents(input, "Tesla, Inc.").length, 2);
+});
+
+test("a subject found only across headline and summary needs a second rare detail", () => {
+  const input = [
+    ev("REGULATORY_LEGAL", "Tesla Cybercab investigation", null),
+    ev("REGULATORY_LEGAL", "NHTSA opens probe into Tesla", "Cybercab"),
+  ];
+  assert.equal(foldDuplicateEvents(input, "Tesla, Inc.").length, 2);
+});
+
+test("a subject common across the feed cannot unlock the lower investigation threshold", () => {
+  const input = [
+    ev("REGULATORY_LEGAL", "Acme snowfall probe", "Offices Chicago Angeles"),
+    ev("REGULATORY_LEGAL", "Acme snowfall inquiry", "Offices Chicago Angeles"),
+    ...["alpha", "bravo", "delta", "echo"].map((detail) =>
+      ev("PARTNERSHIP", `Acme snowfall ${detail}`, null)),
+  ];
+  const folded = foldDuplicateEvents(input, "Acme Inc.");
+  assert.equal(folded.length, input.length);
+  assert.strictEqual(folded[0].event, input[0]);
+  assert.strictEqual(folded[1].event, input[1]);
+});
+
+test("company names and generic investigation words cannot join reports", () => {
+  const input = [
+    ev("REGULATORY_LEGAL", "Tesla Inc NHTSA probe", "Federal regulators open investigation into Tesla vehicles"),
+    ev("REGULATORY_LEGAL", "Federal regulators investigate Tesla", "NHTSA opens probe into Tesla Inc vehicles"),
+  ];
+  assert.equal(foldDuplicateEvents(input, "Tesla, Inc.").length, 2);
+});
+
+test("both investigation matching routes respect the three-day discovery window", () => {
+  const later = "2026-09-10T12:17:56Z";
+  for (const index of [0, 1]) {
+    const input = [cybercab[2], { ...cybercab[index], discoveredAt: later }];
+    assert.equal(foldDuplicateEvents(input, "Tesla, Inc.").length, 2);
+  }
+});
+
+test("a folded investigation cannot bridge two different subjects", () => {
+  const input = [
+    ev("REGULATORY_LEGAL", "Tesla Cybercab probe", null),
+    ev("REGULATORY_LEGAL", "Tesla Cybercab Austin investigation", null),
+    ev("REGULATORY_LEGAL", "Tesla Austin inquiry", null),
+  ];
+  assert.equal(foldDuplicateEvents(input.slice(1), "Tesla, Inc.").length, 1);
+  const folded = foldDuplicateEvents(input, "Tesla, Inc.");
+  assert.deepEqual(folded.map((f) => f.alsoReportedAs.length), [1, 0]);
+  assert.strictEqual(folded[1].event, input[2]);
+});
+
+test("a shared subject and non-investigation kind do not merge independent actions", () => {
+  const pairs = [
+    [ev("RESTRUCTURING", "Tesla Austin layoffs", "Engineers dismissed"),
+      ev("RESTRUCTURING", "Tesla Austin layoff", "Account managers eliminated")],
+    [ev("REGULATORY_LEGAL", "Tesla Texas fined for emissions", null),
+      ev("REGULATORY_LEGAL", "Tesla Texas fine for advertising", null)],
+    [ev("RECALL_SAFETY", "Tesla Cybercab recall for latch", null),
+      ev("RECALL_SAFETY", "Tesla Cybercab recall for software", null)],
+  ];
+  for (const pair of pairs) {
+    assert.equal(foldDuplicateEvents(pair, "Tesla, Inc.").length, 2, pair.map((e) => e.headline).join(" / "));
+  }
 });

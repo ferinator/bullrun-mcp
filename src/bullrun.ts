@@ -13,7 +13,7 @@ import { gatewayHeaders } from "./gateway/mcprush.js";
 const DEFAULT_BASE = "http://localhost:8085";
 const DEFAULT_AUTH_SERVER = "https://bull-run.org";
 const DEFAULT_PUBLIC_URL = "https://mcp.bull-run.org";
-const DEFAULT_SCOPES = "read:market read:portfolios write:drafts";
+const DEFAULT_SCOPES = "read:market read:portfolios write:drafts read:shortlist write:shortlist";
 
 /** Strip trailing slashes so URL joins are predictable. */
 function trimSlashes(value: string): string {

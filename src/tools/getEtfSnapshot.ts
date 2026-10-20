@@ -2,10 +2,11 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { safe } from "./stockIdentity.js";
+import { failureText, NOT_REQUESTED, settle } from "./stockIdentity.js";
 import {
-  findExactEtf,
+  etfClassification,
   fractionToPct,
+  readExactEtf,
   toolResult,
   type EtfPrice,
   type EtfProfile,
@@ -78,16 +79,18 @@ export function registerGetEtfSnapshot(server: McpServer): void {
         const needsProfile = requestedModules.some((module) => PROFILE_MODULES.has(module));
         const needsMarket = requestedModules.includes("market");
 
-        const [identity, profile, priceRows] = await Promise.all([
-          findExactEtf(ticker),
+        const [identityRead, profileRead, priceRead] = await Promise.all([
+          readExactEtf(ticker),
           needsProfile
-            ? safe(bullrunGet<EtfProfile>(`/api/etfs/${enc}/profile`))
-            : Promise.resolve(null),
+            ? settle(bullrunGet<EtfProfile>(`/api/etfs/${enc}/profile`))
+            : Promise.resolve(NOT_REQUESTED),
           needsMarket
-            ? safe(bullrunGet<EtfPrice[]>(`/api/prices/${enc}`, { limit: 1 }))
-            : Promise.resolve(null),
+            ? settle(bullrunGet<EtfPrice[]>(`/api/prices/${enc}`, { limit: 1 }))
+            : Promise.resolve(NOT_REQUESTED),
         ]);
-        const price = priceRows?.[0] ?? null;
+        const identity = identityRead.data;
+        const profile = profileRead.data;
+        const price = priceRead.data?.[0] ?? null;
         const modules: Record<string, unknown> = {};
         const availableModules: SnapshotModule[] = [];
         const missingModules: SnapshotModule[] = [];
@@ -117,8 +120,7 @@ export function registerGetEtfSnapshot(server: McpServer): void {
             case "classification":
               available = hasProfileData(profile, module) || [identity?.sector, identity?.industry].some((value) => value != null);
               modules.classification = {
-                category: profile?.category ?? identity?.sector ?? null,
-                focus: profile?.assetClass ?? identity?.industry ?? null,
+                ...etfClassification(profile, identity),
                 region: profile?.region ?? null,
               };
               break;
@@ -181,12 +183,23 @@ export function registerGetEtfSnapshot(server: McpServer): void {
         }
 
         const found = identity != null || profile != null || price != null;
+        // A read that failed (quota, outage) is not evidence that nothing is stored.
+        const failure = identityRead.failure ?? profileRead.failure ?? priceRead.failure;
+        if (!found && failure) {
+          return { isError: true, content: [{ type: "text" as const, text: `get_etf_snapshot: ${failureText(`ETF data for ${ticker}`, failure)}` }] };
+        }
+        const moduleFailure = (module: SnapshotModule) => module === "market"
+          ? priceRead.failure ?? identityRead.failure
+          : profileRead.failure ?? (module === "identity" || module === "classification" ? identityRead.failure : null);
         const warnings: Array<Record<string, unknown>> = [];
         if (!found) {
           warnings.push({ code: "not_found", message: `No ETF data found for ticker ${ticker}. Use search_etfs to resolve the exact listing ticker.` });
         }
         for (const module of missingModules) {
-          warnings.push({ code: "module_unavailable", module, message: `No stored ${module} data is available for ${ticker}.` });
+          const notLoaded = moduleFailure(module);
+          warnings.push(notLoaded
+            ? { code: "module_not_loaded", module, message: failureText(`The ${module} data for ${ticker}`, notLoaded) }
+            : { code: "module_unavailable", module, message: `No stored ${module} data is available for ${ticker}.` });
         }
 
         return toolResult({

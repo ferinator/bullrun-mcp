@@ -2,6 +2,8 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunPost } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
+import { tidy } from "./stockIdentity.js";
+import { listStockScreenPresets, runStockScreenPreset, STOCK_SCREEN_PRESETS, STOCK_SCREEN_PRESET_KEYS } from "./screenStockPresets.js";
 
 /**
  * The whole-universe screener rule engine is the heaviest upstream call (it evaluates rules
@@ -165,6 +167,10 @@ function appendGlobalRule(rules: ScreenerRule[], rule: Omit<ScreenerRule, "id" |
 }
 
 const inputSchema = {
+  action: z.enum(["list_presets", "run"]).default("run")
+    .describe("list_presets discloses named screens without any backend request; run executes a preset or custom rules and uses the metered screening budget."),
+  preset: z.enum(STOCK_SCREEN_PRESET_KEYS).optional()
+    .describe("Optional named screen. Presets use disclosed fixed rules/sorting, annual lookback (2-10 years), primary active listings and a default limit of 20 (maximum 50). Omit for custom rules; do not combine with rules or minMarketCap."),
   sector: z.string().optional()
     .describe("Exact sector name to filter by, e.g. \"Technology\", \"Healthcare\". Omit for all sectors."),
   industry: z.string().optional()
@@ -173,10 +179,10 @@ const inputSchema = {
     .describe("Exact country name to filter by, e.g. \"United States\", \"Germany\". Omit for all countries."),
   countries: z.array(z.string()).optional()
     .describe("Exact country names to include. Use this for multi-country screens; it overrides country when provided."),
-  lookbackMode: z.enum(["annual", "quarterly"]).default("annual")
-    .describe("Whether rule evaluation uses annual or quarterly reporting periods."),
-  lookback: z.number().int().min(1).max(40).default(3)
-    .describe("How many reporting periods to evaluate. Growth rules need at least 2 comparable periods."),
+  lookbackMode: z.enum(["annual", "quarterly"]).optional()
+    .describe("Whether rule evaluation uses annual or quarterly reporting periods. Default annual; presets require annual."),
+  lookback: z.number().int().min(1).max(40).optional()
+    .describe("How many reporting periods to evaluate (default 3). Growth rules need at least 2 comparable periods; presets require 2-10 annual observations."),
   mode: z.enum(["annual", "quarterly"]).optional()
     .describe("Deprecated alias for lookbackMode; kept for compatibility."),
   periods: z.number().int().min(1).max(40).optional()
@@ -194,7 +200,7 @@ const inputSchema = {
       .describe("Optional money unit for money metrics: '', K, M, B or T."),
     groupId: z.number().int().min(1).default(1)
       .describe("Rules with the same groupId are ANDed; different groups are ORed."),
-  })).default([])
+  })).optional()
     .describe("Fundamental rules. Same groupId means AND; different groupIds mean OR."),
   minMarketCap: z.number().min(0).optional()
     .describe("Compatibility shortcut: adds marketCap >= this absolute value to every rule group."),
@@ -202,12 +208,12 @@ const inputSchema = {
     .describe("Include secondary cross-listings of the same security. Default false (primary listings only)."),
   includeInactive: z.boolean().default(false)
     .describe("Include delisted/inactive tickers with no recent price bar. Default false."),
-  sortBy: z.enum(SORT_KEYS).default("marketCap")
-    .describe("Metric to sort by. revenueGrowth is accepted as an alias for revenueGrowthPct."),
-  order: z.enum(["desc", "asc"]).default("desc")
-    .describe("Sort direction. Nulls always sort last regardless of direction."),
-  limit: z.number().int().min(1).max(100).default(25)
-    .describe("Maximum number of stocks to return (1-100)."),
+  sortBy: z.enum(SORT_KEYS).optional()
+    .describe("Metric to sort by. Custom default marketCap; presets use their disclosed sorting. revenueGrowth is accepted as an alias for revenueGrowthPct."),
+  order: z.enum(["desc", "asc"]).optional()
+    .describe("Sort direction. Custom default desc; presets use their disclosed order. Nulls always sort last regardless of direction."),
+  limit: z.number().int().min(1).max(100).optional()
+    .describe("Maximum stocks to return: custom default 25 (1-100), preset default 20 (1-50)."),
 };
 
 export function registerScreenStocks(server: McpServer): void {
@@ -217,12 +223,32 @@ export function registerScreenStocks(server: McpServer): void {
       title: "Screen stocks",
       annotations: { readOnlyHint: true },
       description:
-        "Screen the global Bullrun stock universe with the same rule engine as the app screener. Filter by sector, industry, country/countries, primary vs secondary listings, active vs inactive listings, lookback mode, AND/OR rule groups, comparison operators, money units, growth metrics and latest-value metrics. Returns a compact table of matching stocks. Read-only.",
+        "Screen the global Bullrun stock universe with the app rule engine using custom fundamental rules or named presets: profitable value, dividend income, growth and cash flow, cash generators, dividend growth. action=list_presets discloses exact thresholds, units, annual lookback and sorting without any backend request. action=run (default) executes one preset or custom rules; running uses the API's metered screening budget. Custom screens support sector/industry/country, listing controls, annual/quarterly lookback, AND/OR rule groups and money units. Presets are mechanical starting points, not recommendations or famous-investor strategies. Read-only.",
       inputSchema,
     },
     async (args) => {
       try {
         requirePublicScope("read:market");
+        if (args.action === "list_presets") return listStockScreenPresets();
+        if (args.preset) {
+          const preset = STOCK_SCREEN_PRESETS[args.preset];
+          if (args.rules !== undefined || args.minMarketCap != null) {
+            throw new Error("Choose a preset or custom rules/minMarketCap, not both. Use action=list_presets to copy and edit a preset's disclosed rules.");
+          }
+          if (args.lookbackMode === "quarterly" || args.mode === "quarterly" || args.includeSecondary || args.includeInactive) {
+            throw new Error("Named presets require annual lookback and primary active listings. Copy their disclosed rules into a custom screen to change these controls.");
+          }
+          if (args.sortBy != null && normalizeSortBy(args.sortBy) !== preset.sortBy || args.order != null && args.order !== preset.order) {
+            throw new Error("Named presets use their disclosed sorting. Copy the preset rules into a custom screen to change sortBy or order.");
+          }
+          const lookback = args.lookback ?? args.periods ?? 3;
+          const limit = args.limit ?? 20;
+          if (lookback < 2 || lookback > 10 || limit > 50) {
+            throw new Error("Preset screens accept 2-10 annual observations and a limit of 1-50 stocks.");
+          }
+          return runStockScreenPreset({ preset: args.preset, sector: args.sector, industry: args.industry,
+            countries: args.countries ?? (args.country ? [args.country] : []), lookback, limit });
+        }
         const lookbackMode = args.lookbackMode ?? args.mode ?? "annual";
         const lookback = args.lookback ?? args.periods ?? 3;
         const sortBy = normalizeSortBy(args.sortBy ?? "marketCap");
@@ -275,8 +301,8 @@ export function registerScreenStocks(server: McpServer): void {
           industry: r.industry,
           country: r.country,
           marketCap: r.marketCap,
-          peRatio: r.peRatio,
-          dividendYield: r.dividendYield,
+          peRatio: tidy(r.peRatio, 5),
+          dividendYield: tidy(r.dividendYield, 5),
           latestRevenue: r.latestRevenue,
           revenueGrowthPct: pctGrowth(r.revenueSeries),
           latestNetIncome: r.latestNetIncome,
@@ -289,7 +315,7 @@ export function registerScreenStocks(server: McpServer): void {
           ebitdaGrowthPct: pctGrowth(r.ebitdaSeries),
           latestFreeCashflow: r.latestFreeCashflow,
           freeCashflowGrowthPct: pctGrowth(r.freeCashflowSeries),
-          latestDilutedEps: r.latestDilutedEps,
+          latestDilutedEps: tidy(r.latestDilutedEps),
           epsGrowthPct: pctGrowth(r.dilutedEpsSeries),
           latestOperatingCashflow: r.latestOperatingCashflow,
           operatingCashflowGrowthPct: pctGrowth(r.operatingCashflowSeries),
@@ -297,7 +323,7 @@ export function registerScreenStocks(server: McpServer): void {
           latestTotalAssets: r.latestTotalAssets,
           latestTotalDebt: r.latestTotalDebt,
           latestStockholdersEquity: r.latestStockholdersEquity,
-          latestDividendsPerShare: r.latestDividendsPerShare,
+          latestDividendsPerShare: tidy(r.latestDividendsPerShare),
           dividendGrowthPct: pctGrowth(r.dividendsPerShareSeries),
         }));
 

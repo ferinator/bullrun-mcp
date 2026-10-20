@@ -355,6 +355,16 @@ const client = new Client({ name: "authless", version: "0.0.0" });
 await client.connect(transport); // no token -> must succeed in authless mode
 
 const { tools } = await client.listTools();
+// The opt-in compatibility endpoint preserves legacy ETF payload units and shape.
+const legacyClient = new Client({ name: "legacy-authless", version: "0.0.0" });
+await legacyClient.connect(new StreamableHTTPClientTransport(new URL(`${base}/legacy/mcp`)));
+const legacyEtf = await legacyClient.callTool({ name: "query_etfs", arguments: { ticker: "SPY", includeHoldings: false, priceLimit: 0 } });
+const legacyPayload = legacyEtf.structuredContent ?? JSON.parse(legacyEtf.content?.[0]?.text ?? "{}");
+ok(!legacyEtf.isError && legacyPayload.detail?.identity?.ticker === "SPY" &&
+  legacyPayload.detail?.profile?.expenseRatio === 0.0009 && legacyPayload.detail?.profile?.yieldTtm === 0.012 &&
+  legacyPayload.detail?.prices?.length === 0 && legacyPayload.detail?.holdings?.length === 0,
+  "legacy query_etfs -> raw fractional ratios and unchanged detail shape", JSON.stringify(legacyPayload).slice(0, 180));
+await legacyClient.close();
 ok(
   tools.some((t) => t.name === "screen_stocks") &&
     tools.some((t) => t.name === "search_etfs") &&
@@ -364,10 +374,10 @@ ok(
     tools.some((t) => t.name === "get_etf_exposures") &&
     tools.some((t) => t.name === "get_etf_risk") &&
     tools.some((t) => t.name === "compare_etfs") &&
-    tools.some((t) => t.name === "analyze_etf_overlap") &&
-    tools.some((t) => t.name === "analyze_portfolio_fit") &&
+    !tools.some((t) => t.name === "analyze_etf_overlap") &&
+    !tools.some((t) => t.name === "analyze_portfolio_fit") &&
     tools.some((t) => t.name === "simulate_etf_cost") &&
-    tools.some((t) => t.name === "query_etfs") &&
+    !tools.some((t) => t.name === "query_etfs") &&
     tools.some((t) => t.name === "get_financial_history") &&
     tools.some((t) => t.name === "get_quality_moat_metrics") &&
     tools.some((t) => t.name === "list_portfolios") &&
@@ -501,14 +511,14 @@ ok(
   JSON.stringify(comparisonPayload).slice(0, 320),
 );
 
-const overlap = await client.callTool({ name: "analyze_etf_overlap", arguments: { tickers: ["SPY", "VTI"] } });
-const overlapPayload = overlap.structuredContent ?? JSON.parse(overlap.content?.[0]?.text ?? "{}");
+const overlap = await client.callTool({ name: "compare_etfs", arguments: { tickers: ["SPY", "VTI"], include: ["overlap"] } });
+const overlapPayload = (overlap.structuredContent ?? JSON.parse(overlap.content?.[0]?.text ?? "{}")).overlap;
 ok(
   !overlap.isError &&
     overlapPayload.pairs?.[0]?.sharedHoldings === 2 &&
     overlapPayload.pairs?.[0]?.weightedOverlapPct === 10 &&
     overlapPayload.warnings?.[0]?.includes("lower bound"),
-  "analyze_etf_overlap -> shared holdings + weighted lower-bound overlap",
+  "compare_etfs(overlap) -> shared holdings + weighted lower-bound overlap",
   JSON.stringify(overlapPayload).slice(0, 300),
 );
 
@@ -715,6 +725,10 @@ ok(
 
 const rp = await client.callTool({ name: "list_portfolios", arguments: {} });
 ok(rp.isError === true && /Authentication required/i.test(rp.content?.[0]?.text ?? ""), "list_portfolios(no token) -> auth-required error", rp.content?.[0]?.text ?? "");
+// The anonymous refusal is where a user decides to connect, so it must name the login endpoint.
+const anonSave = await client.callTool({ name: "save_research_shortlist", arguments: { tickers: ["AAPL"] } });
+ok(anonSave.isError === true && (anonSave.content?.[0]?.text ?? "").includes("https://mcp.bull-run.org/account/mcp"),
+  "save_research_shortlist(no token) -> names the account endpoint", anonSave.content?.[0]?.text ?? "");
 
 // The dedicated login endpoint must 401-challenge even in authless mode, so an OAuth client
 // (Claude) is driven into the sign-in flow while /mcp stays open for anonymous callers. A raw

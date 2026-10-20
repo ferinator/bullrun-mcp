@@ -2,13 +2,13 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { findExactStock, identityPayload } from "./stockIdentity.js";
+import { errorText, identityPayload, resolveStockTicker, TICKER_CONVENTION, tickerNotFoundText } from "./stockIdentity.js";
 import { toolResult } from "./etfData.js";
 import { aggregateDailyPrices, closePerformance, emaSeries, macdSeries, normalizeDailyPrices, roundPriceMetric, rsiSeries, smaSeries, validCalendarDate } from "./stockPriceHistoryData.js";
 
 const calendarDate = z.string().refine(validCalendarDate, "Use a real calendar date in YYYY-MM-DD format.");
 const inputSchema = {
-  ticker: z.string().trim().min(1).max(32).describe("Exact native Bullrun stock ticker, e.g. AAPL, SAP or ABBN; find it with search_stocks. Do not append Yahoo exchange suffixes."),
+  ticker: z.string().trim().min(1).max(32).describe("Bullrun stock ticker, e.g. AAPL, SAP, ABBN, 6324.T or 7203. " + TICKER_CONVENTION),
   interval: z.enum(["daily", "weekly", "monthly"]).default("daily").describe("Aggregate stored daily bars. Weekly buckets start Monday; monthly buckets use the calendar month. No intraday or live quotes."),
   startDate: calendarDate.optional().describe("Inclusive trade-date cutoff, applied after loading the latest source bars. Cannot page into history older than the source limit."),
   endDate: calendarDate.optional().describe("Inclusive last trade date; the API still loads the most recent source bars before this filter."),
@@ -31,10 +31,11 @@ export function registerGetStockPriceHistory(server: McpServer): void {
       return { isError: true, content: [{ type: "text", text: "startDate must be on or before endDate." }] };
     }
     try {
-      const ticker = args.ticker.toUpperCase();
-      const [identity, raw] = await Promise.all([
-        findExactStock(ticker), bullrunGet<unknown>(`/api/prices/${encodeURIComponent(ticker)}`, { limit: args.limit }, 8_000),
-      ]);
+      const resolution = await resolveStockTicker(args.ticker);
+      if (!resolution.ticker) return { content: [{ type: "text", text: tickerNotFoundText(args.ticker, resolution) }] };
+      const ticker = resolution.ticker.toUpperCase();
+      const identity = resolution.stock;
+      const raw = await bullrunGet<unknown>(`/api/prices/${encodeURIComponent(ticker)}`, { limit: args.limit }, 8_000);
       if (!Array.isArray(raw)) throw new Error("Invalid price response");
       const normalized = normalizeDailyPrices(raw.slice(0, args.limit), ticker);
       const selected = normalized.prices.filter(row => (!args.startDate || row.tradeDate >= args.startDate) && (!args.endDate || row.tradeDate <= args.endDate));
@@ -58,7 +59,8 @@ export function registerGetStockPriceHistory(server: McpServer): void {
       const required = { sma: args.movingAveragePeriod, ema: args.movingAveragePeriod, rsi: args.rsiPeriod + 1, macd: 34 };
       for (const name of requestedIndicators) if (bars.length < required[name]) warnings.push(`${name.toUpperCase()} requires ${required[name]} selected interval observations for a fully warmed value; only ${bars.length} are available.`);
       return toolResult({
-        ticker, identity: identityPayload(identity), interval: args.interval, requestedIndicators,
+        ticker, ...(resolution.note ? { tickerResolution: resolution.note } : {}),
+        identity: identityPayload(identity), interval: args.interval, requestedIndicators,
         bars: bars.map((bar, index) => ({ ...bar, ...performance.observations[index],
           ...(sma ? { sma: rounded(sma[index]) } : {}), ...(ema ? { ema: rounded(ema[index]) } : {}),
           ...(rsi ? { rsi: rounded(rsi[index]) } : {}),
@@ -80,8 +82,9 @@ export function registerGetStockPriceHistory(server: McpServer): void {
           freshness: "trade dates describe observations, not ingestion times. retrievedAt is this read time. No live or intraday source is queried." },
         warnings,
       });
-    } catch {
-      return { isError: true, content: [{ type: "text", text: "Stock price history could not be loaded. Check the exact Bullrun ticker and retry; upstream details are not exposed." }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: errorText(err, "Stock price history",
+        "Stock price history could not be loaded. Check the exact Bullrun ticker and retry; upstream details are not exposed.") }] };
     }
   });
 }

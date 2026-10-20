@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunPost } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
 import { fractionToPct, toolResult } from "./etfData.js";
+import { roundMetric } from "./etfAnalytics.js";
 
 /**
  * The ETF screen evaluates rules across the whole fund universe (~25k listing rows) in one
@@ -200,14 +201,14 @@ function project(row: EtfScreenRow): Record<string, unknown> {
     totalAssets: row.totalAssets ?? null,
     nav: row.nav ?? null,
     holdingsCount: row.holdingsCount ?? null,
-    top10ConcentrationPct: row.top10ConcentrationPct ?? null,
+    top10ConcentrationPct: roundMetric(row.top10ConcentrationPct ?? null, 4),
     inceptionDate: row.inceptionDate ?? null,
-    return1mPct: row.return1mPct ?? null,
-    return3mPct: row.return3mPct ?? null,
-    return6mPct: row.return6mPct ?? null,
-    return1yPct: row.return1yPct ?? null,
-    returnYtdPct: row.returnYtdPct ?? null,
-    volatility1yPct: row.volatility1yPct ?? null,
+    return1mPct: roundMetric(row.return1mPct ?? null, 4),
+    return3mPct: roundMetric(row.return3mPct ?? null, 4),
+    return6mPct: roundMetric(row.return6mPct ?? null, 4),
+    return1yPct: roundMetric(row.return1yPct ?? null, 4),
+    returnYtdPct: roundMetric(row.returnYtdPct ?? null, 4),
+    volatility1yPct: roundMetric(row.volatility1yPct ?? null, 4),
     avgVolume90d: row.avgVolume90d ?? null,
     avgTurnover90d: row.avgTurnover90d ?? null,
     isPrimaryListing: row.primaryTicker == null,
@@ -272,7 +273,7 @@ export function registerScreenEtfs(server: McpServer): void {
       title: "Screen ETFs",
       annotations: { readOnlyHint: true },
       description:
-        "Screen the WHOLE ETF universe by numeric rules and fund attributes in one pass — expense ratio, AUM, yield, trailing returns, volatility, liquidity, top-10 concentration, fund age and holdings count — combined with issuer, index, domicile, UCITS status, distribution policy, currency hedging and constituent look-through (holdingSearch finds funds by what they hold). Prefer this over search_etfs for any \"cheapest / largest / best performing / most liquid\" question: search_etfs only filters a bounded candidate scan, while this evaluates the full universe and reports evaluatedCount and matchCount. Percentages are percentage points. This is the heaviest read in the API and is metered against a small per-day action budget, so build one well-specified screen rather than probing repeatedly. Read-only.",
+        "Screen the WHOLE ETF universe by numeric rules and fund attributes in one pass — expense ratio, AUM, yield, trailing returns, volatility, liquidity, top-10 concentration, fund age and holdings count — combined with issuer, index, domicile, UCITS status, distribution policy, currency hedging and constituent look-through (holdingSearch finds funds by what they hold). Prefer this over search_etfs for any \"cheapest / largest / best performing / most liquid\" question: search_etfs only filters a bounded candidate scan, while this evaluates the full universe and reports evaluatedCount and matchCount. Percentages are percentage points. This full-universe screen is an expensive read, and request limits depend on your connection and plan. Build one precise screen to conserve your allowance. Read-only.",
       inputSchema,
       outputSchema,
     },

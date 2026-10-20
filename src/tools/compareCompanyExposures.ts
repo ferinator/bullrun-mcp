@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet, config } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
 import { mapWithConcurrency, toolResult } from "./etfData.js";
+import { resolveStockTicker, TICKER_CONVENTION, tickerNotFoundText } from "./stockIdentity.js";
 
 const ROLES = ["competitors", "suppliers", "customers", "partners"] as const;
 type Role = typeof ROLES[number];
@@ -40,7 +41,7 @@ interface Company {
 
 const inputSchema = {
   tickers: z.array(z.string().trim().min(1).max(40)).min(2).max(5)
-    .describe("Two to five distinct exact Bullrun listing tickers. Names and inferred exchange suffixes are not accepted."),
+    .describe("Two to five distinct Bullrun listing tickers, e.g. AAPL, BMW or 6324.T. " + TICKER_CONVENTION + " Company names are not accepted here."),
   roles: z.array(z.enum(ROLES)).min(1).max(4).default([...ROLES])
     .describe("Counterparty roles from EACH subject company's point of view; default all four. Suppliers and customers preserve the direction of SUPPLIES_TO."),
   verifiedOnly: z.boolean().default(false)
@@ -129,7 +130,7 @@ export function registerCompareCompanyExposures(server: McpServer): void {
   server.registerTool("compare_company_exposures", {
     title: "Compare shared company exposures",
     annotations: { readOnlyHint: true },
-    description: "Compare the cached company relationship graphs of two to five exact stock tickers. Finds shared suppliers, customers, competitors and partners, including cross-role overlaps, using stable company entity IDs or exact tickers only. Returns directed direct relationships with VERIFIED vs SUGGESTED/NEEDS_REVIEW status, confidence, sole-source flags, disclosed metrics with meaning/unit/period, and primary-source URLs/dates. Shared groups reference the evidence-bearing relationship rows by ID. Missing graphs or edges mean unknown coverage. At most five cached reads; never starts paid discovery, infers exposure weights or estimates portfolio losses. Read-only.",
+    description: "Compare the cached company relationship graphs of two to five stock tickers. Finds shared suppliers, customers, competitors and partners, including cross-role overlaps, using stable company entity IDs or exact tickers only. Returns directed direct relationships with VERIFIED vs SUGGESTED/NEEDS_REVIEW status, confidence, sole-source flags, disclosed metrics with meaning/unit/period, and primary-source URLs/dates. Shared groups reference the evidence-bearing relationship rows by ID. Missing graphs or edges mean unknown coverage. One cached graph read per company (plus a ticker lookup when the typed ticker has no graph); never starts paid discovery, infers exposure weights or estimates portfolio losses. Read-only.",
     inputSchema,
     outputSchema: {
       tickers: z.array(z.string()), requestedRoles: z.array(z.enum(ROLES)), retrievedAt: z.string(),
@@ -148,17 +149,30 @@ export function registerCompareCompanyExposures(server: McpServer): void {
     const roles = [...new Set(args.roles)];
     const timeout = Number.isFinite(config.requestTimeoutMs) && config.requestTimeoutMs > 0
       ? Math.min(8_000, config.requestTimeoutMs) : 8_000;
-    const reads = await mapWithConcurrency(validTickers, 3, async symbol => {
-      try { return await bullrunGet<Network>(`/api/stocks/${encodeURIComponent(symbol)}/relationships`, undefined, timeout); }
-      catch { return null; } // Never disclose upstream response bodies, addresses or credentials.
+    const graph = (symbol: string) => bullrunGet<Network>(`/api/stocks/${encodeURIComponent(symbol)}/relationships`, undefined, timeout)
+      .catch(() => null); // Never disclose upstream response bodies, addresses or credentials.
+    const resolvedReads = await mapWithConcurrency(validTickers, 3, async input => {
+      const network = await graph(input);
+      if (!network || network.status !== "none" || network.nodes?.length) return { input, symbol: input, network, notes: [] as string[] };
+      // No graph under the typed ticker. It may be a bare code or Yahoo symbol of a stored
+      // listing (6324 is stored as 6324.T), so look the ticker up before calling it unknown.
+      const resolution = await resolveStockTicker(input).catch(() => null);
+      if (!resolution) return { input, symbol: input, network, notes: [] };
+      if (!resolution.ticker) return { input, symbol: input, network, notes: [tickerNotFoundText(input, resolution)] };
+      const symbol = ticker(resolution.ticker);
+      if (!symbol || symbol === input) return { input, symbol: input, network, notes: [] };
+      return { input, symbol, network: await graph(symbol), notes: resolution.note ? [resolution.note] : [] };
     });
+    // Two inputs can name one listing (6324 and 6324.T); compare it once.
+    const reads = resolvedReads.filter((read, index) => resolvedReads.findIndex(other => other.symbol === read.symbol) === index);
+    const duplicateInputs = resolvedReads.filter(read => !reads.includes(read))
+      .map(read => `${read.input} names the same listing as another input (${read.symbol}); it is compared once.`);
     const eligible: Relationship[] = [];
-    const companies: Company[] = validTickers.map((symbol, index) => {
-      const network = reads[index];
+    const companies: Company[] = reads.map(({ symbol, network, notes }) => {
       const company: Company = { ticker: symbol, status: "unavailable", graphStatus: text(network?.status, 40), subject: null,
         cachedCoverage: null, observedEdges: null, matchingRelationships: null, returnedRelationships: 0,
         omittedRelationships: null, ignoredIndirectOrMalformedEdges: 0, hiddenUnverifiedRelationships: 0,
-        countsByRole: null, warnings: [] };
+        countsByRole: null, warnings: [...notes] };
       if (!network || typeof network !== "object") { company.warnings.push("Cached graph could not be retrieved; retry later."); return company; }
       if (ticker(network.subject?.ticker) !== symbol) {
         company.status = "identity_mismatch";
@@ -235,10 +249,10 @@ export function registerCompareCompanyExposures(server: McpServer): void {
       .sort((a, b) => Number(sharedIds.has(b.id)) - Number(sharedIds.has(a.id))
         || Number(b.verified) - Number(a.verified) || (b.confidence ?? -1) - (a.confidence ?? -1))
       .slice(0, args.limitPerCompany));
-    const warnings = ["Cached disclosures are incomplete: missing relationships and missing graphs mean unknown coverage. Shared counterparties identify connections, not quantified portfolio exposure or loss estimates."];
+    const warnings = ["Cached disclosures are incomplete: missing relationships and missing graphs mean unknown coverage. Shared counterparties identify connections, not quantified portfolio exposure or loss estimates.", ...duplicateInputs];
     const subjectIds = companies.flatMap(company => company.subject ? [company.subject.nodeId] : []);
     if (new Set(subjectIds).size < subjectIds.length) warnings.push("Some input listing tickers resolve to the same company entity; these listings are not counted as distinct companies in shared groups.");
-    const payload = { tickers: validTickers, requestedRoles: roles, retrievedAt: new Date().toISOString(), companies, relationships,
+    const payload = { tickers: reads.map(read => read.symbol), requestedRoles: roles, retrievedAt: new Date().toISOString(), companies, relationships,
       sharedCounterparties: allShared, totals: { matchingRelationships: eligible.length, returnedRelationships: 0,
         omittedRelationships: 0, sharedCounterpartiesInMatchingGraphs: allShared.length, returnedSharedCounterparties: 0,
         truncated: false, responseByteLimit: MAX_RESULT_BYTES },
@@ -246,7 +260,7 @@ export function registerCompareCompanyExposures(server: McpServer): void {
         matching: "Counterparties are joined only by stable company_entity node IDs or exact normalized ticker, never fuzzy company names. Node IDs, tickers and observed names are retained. Shared groups require at least two distinct subject entity IDs.",
         evidence: "Each shared group's relationshipIds reference full directed rows in relationships. Each edge keeps its own status, confidence, verification time, sole-source flag and disclosed metrics; confidences and exposures are not aggregated. Up to three source records and eight metrics per edge are returned; detailsOmitted reports extra records.",
         metricBasis: "A supplier's revenue share from a customer does not measure the customer's purchasing dependence. Units, periods and measurement classes remain as disclosed; no currency conversion or invented weights.",
-        bounds: "At most five cached GET reads, three concurrent, each with an eight-second maximum timeout. Shared edges are prioritized before the per-company limit. The response byte budget can omit further edges; shared groups and returned counts then describe only returned evidence.",
+        bounds: "One cached graph GET per company, three concurrent, each with an eight-second maximum timeout. Only a ticker with no graph under the symbol as typed adds a ticker lookup and, when it names another stored listing, one more graph read. Shared edges are prioritized before the per-company limit. The response byte budget can omit further edges; shared groups and returned counts then describe only returned evidence.",
       }, warnings };
     function updateCounts() {
       const included = new Set(relationships.map(row => row.id));

@@ -2,7 +2,16 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { identityPayload, resolveStockTicker, safe, TICKER_CONVENTION, tickerNotFoundText } from "./stockIdentity.js";
+import {
+  failureText,
+  identityPayload,
+  NOT_REQUESTED,
+  resolveStockTicker,
+  settle,
+  TICKER_CONVENTION,
+  tickerNotFoundText,
+  type ReadFailure,
+} from "./stockIdentity.js";
 import { clipText } from "./textClip.js";
 import { foldDuplicateEvents } from "./eventFolding.js";
 import { toolResult } from "./etfData.js";
@@ -125,29 +134,50 @@ export function registerGetCompanyRisk(server: McpServer): void {
         const withTerms = args.detail === "full";
         const base = `/api/company-intelligence/${enc}`;
 
-        const [preview, factors, suppliers, events] = await Promise.all([
+        // Each module keeps its own failure: during a 429 burst one read can fail while
+        // the others succeed, and a failed read is never evidence that nothing is stored.
+        const [previewRead, factorsRead, suppliersRead, eventsRead] = await Promise.all([
           include.has("dials") || include.has("headline")
-            ? safe(bullrunGet<RiskPreview>(`${base}/risk-preview`))
-            : Promise.resolve(null),
+            ? settle(bullrunGet<RiskPreview>(`${base}/risk-preview`))
+            : Promise.resolve(NOT_REQUESTED),
           include.has("risk_factors")
-            ? safe(bullrunGet<RiskProfileRow[]>(`${base}/risk-profile`, { limit: 200 }))
-            : Promise.resolve(null),
+            ? settle(bullrunGet<RiskProfileRow[]>(`${base}/risk-profile`, { limit: 200 }))
+            : Promise.resolve(NOT_REQUESTED),
           include.has("supplier_exposure")
-            ? safe(bullrunGet<SupplierExposure>(`${base}/supplier-exposure`))
-            : Promise.resolve(null),
+            ? settle(bullrunGet<SupplierExposure>(`${base}/supplier-exposure`))
+            : Promise.resolve(NOT_REQUESTED),
           include.has("events")
-            ? safe(bullrunGet<CompanyEvent[]>(`${base}/events`, { limit: 40 }))
-            : Promise.resolve(null),
+            ? settle(bullrunGet<CompanyEvent[]>(`${base}/events`, { limit: 40 }))
+            : Promise.resolve(NOT_REQUESTED),
         ]);
+        const preview = previewRead.data;
+        const factors = factorsRead.data;
+        const suppliers = suppliersRead.data;
+        const events = eventsRead.data;
+
+        const failed = new Map<Module, ReadFailure>();
+        for (const [module, read] of [
+          ["dials", previewRead], ["headline", previewRead], ["risk_factors", factorsRead],
+          ["supplier_exposure", suppliersRead], ["events", eventsRead],
+        ] as const) {
+          if (include.has(module) && read.failure) failed.set(module, read.failure);
+        }
+        if (failed.size === include.size) {
+          const failure = [...failed.values()].includes("quota") ? "quota" : "unavailable";
+          return { isError: true, content: [{ type: "text", text: `get_company_risk: ${failureText(`Risk data for ${ticker}`, failure)}` }] };
+        }
 
         const warnings: string[] = [];
         const modules: Record<string, unknown> = {};
 
         if (include.has("dials")) {
           const cluster = preview?.dials ?? null;
-          if (!cluster) {
+          if (previewRead.failure) {
             modules.dials = null;
-            warnings.push("Risk dials could not be loaded for this ticker.");
+            warnings.push(failureText("Risk dials", previewRead.failure));
+          } else if (!cluster) {
+            modules.dials = null;
+            warnings.push("No risk dial reading was returned for this ticker; its risk is unmeasured, not low.");
           } else {
             const dark = (cluster.dials ?? []).filter((d) => d.score == null).map((d) => d.key);
             if (dark.length) {
@@ -165,12 +195,18 @@ export function registerGetCompanyRisk(server: McpServer): void {
 
         if (include.has("headline")) {
           modules.headline = preview?.headline ?? null;
+          if (previewRead.failure && !include.has("dials")) {
+            warnings.push(failureText("The latest headline", previewRead.failure));
+          }
           if (preview?.headline) {
             warnings.push("The headline is context beside the dials, never an input to them; the dials read filings and market data.");
           }
         }
 
-        if (include.has("risk_factors")) {
+        if (include.has("risk_factors") && factorsRead.failure) {
+          modules.riskFactors = null;
+          warnings.push(failureText("Filing risk factors", factorsRead.failure));
+        } else if (include.has("risk_factors")) {
           const rows = [...(factors ?? [])].sort(bySeverityThenConfidence);
           modules.riskFactors = {
             total: rows.length,
@@ -203,7 +239,10 @@ export function registerGetCompanyRisk(server: McpServer): void {
         }
 
         if (include.has("supplier_exposure")) {
-          if (!suppliers || !suppliers.suppliers?.length) {
+          if (suppliersRead.failure) {
+            modules.supplierExposure = null;
+            warnings.push(failureText("Supplier exposure", suppliersRead.failure));
+          } else if (!suppliers || !suppliers.suppliers?.length) {
             modules.supplierExposure = null;
             warnings.push("No priced supplier relationships are on file, so supplier concentration is unknown (not zero).");
           } else {
@@ -233,7 +272,10 @@ export function registerGetCompanyRisk(server: McpServer): void {
           }
         }
 
-        if (include.has("events")) {
+        if (include.has("events") && eventsRead.failure) {
+          modules.events = null;
+          warnings.push(failureText("Company events", eventsRead.failure));
+        } else if (include.has("events")) {
           const rows = [...(events ?? [])].sort(bySeverityThenConfidence);
           const stories = foldDuplicateEvents(rows, identity?.company ?? null);
           const shown = stories.slice(0, args.maxEvents);
@@ -263,12 +305,18 @@ export function registerGetCompanyRisk(server: McpServer): void {
         }
 
         // The dials endpoint never 404s (an unknown ticker comes back as six dark dials), so
-        // "found" means something was actually measured or stored for it.
+        // "found" means something was actually measured or stored for it. The claim covers
+        // only the modules that were read, and none can have failed: a 429 says nothing.
         const cluster = preview?.dials ?? null;
         const measured = Boolean(cluster?.composite) || (cluster?.dials ?? []).some((d) => d.score != null)
           || Boolean(factors?.length) || Boolean(suppliers?.suppliers?.length) || Boolean(events?.length);
-        if (!measured) {
-          warnings.push(`${ticker} is a Bullrun listing, but no risk dials, filing risk factors, supplier data or events are stored for it yet: its risk is unmeasured, not low.`);
+        const checked = ([
+          ["dials", "risk dials"], ["risk_factors", "filing risk factors"],
+          ["supplier_exposure", "supplier data"], ["events", "events"],
+        ] as const).filter(([module]) => include.has(module)).map(([, label]) => label);
+        if (!measured && !failed.size && checked.length) {
+          const list = checked.length > 1 ? `${checked.slice(0, -1).join(", ")} or ${checked.at(-1)}` : checked[0];
+          warnings.push(`${ticker} is a Bullrun listing, but no ${list} are stored for it yet: its risk is unmeasured, not low.`);
         }
 
         return toolResult({
@@ -276,6 +324,7 @@ export function registerGetCompanyRisk(server: McpServer): void {
           ...(resolution.note ? { tickerResolution: resolution.note } : {}),
           identity: identityPayload(identity),
           requestedModules: [...include],
+          ...(failed.size ? { unavailableModules: [...failed.keys()] } : {}),
           methodology: RISK_METHOD_NOTE,
           bandScale: BAND_SCALE,
           modules,

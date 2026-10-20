@@ -16,12 +16,89 @@ export interface Stock {
   quoteType: string | null;
 }
 
+/**
+ * Null on ANY error. Only for optional extras a tool can do without (a freshness
+ * stamp, a live quote over a daily close). A read whose emptiness the tool reports
+ * ("no risk factors are stored") must use {@link settle}: a 429 is not "nothing stored".
+ */
 export async function safe<T>(p: Promise<T>): Promise<T | null> {
   try {
     return await p;
   } catch {
     return null;
   }
+}
+
+/**
+ * Why a bullrun-api read failed, when the answer was not simply "nothing stored":
+ * the connection's request quota or per-minute rate limit (429), or an API that
+ * did not answer (5xx, timeout, unreachable). Neither says anything about coverage.
+ */
+export type ReadFailure = "quota" | "unavailable";
+
+/** What to tell the user about a failed read, without upstream bodies or internal addresses. */
+export function failureText(what: string, failure: ReadFailure): string {
+  return failure === "quota"
+    ? `${what} could not be loaded: Bullrun's request quota or rate limit for this connection was reached (HTTP 429). This is not a coverage answer; retry later.`
+    : `${what} could not be loaded: Bullrun's data API is not reachable right now. This is not a coverage answer; retry shortly.`;
+}
+
+/** A quota or outage error, thrown so the tool reports it rather than "not found". */
+export class UpstreamReadError extends Error {
+  constructor(readonly failure: ReadFailure, what: string) {
+    super(failureText(what, failure));
+    this.name = "UpstreamReadError";
+  }
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+function isNotFound(err: unknown): boolean {
+  return /bullrun-api 404 /.test(errorMessage(err));
+}
+
+/** The quota or outage behind an error from a bullrun-api read, or null when it was neither. */
+export function readFailure(err: unknown): ReadFailure | null {
+  if (err instanceof UpstreamReadError) return err.failure;
+  const message = errorMessage(err);
+  if (/bullrun-api 429 /.test(message)) return "quota";
+  return /bullrun-api 5\d\d |Failed to reach bullrun-api /.test(message) ? "unavailable" : null;
+}
+
+/** A read's data (null when nothing is stored), or why it could not be loaded. */
+export interface Settled<T> {
+  data: T | null;
+  failure: ReadFailure | null;
+}
+
+/** The {@link Settled} value of a read that was not requested. */
+export const NOT_REQUESTED: Settled<never> = { data: null, failure: null };
+
+/**
+ * Like {@link safe}, but keeps a failed read apart from an empty one: a 404 is
+ * "nothing stored", every other error is a failure the tool must report as such.
+ */
+export async function settle<T>(p: Promise<T>): Promise<Settled<T>> {
+  try {
+    return { data: await p, failure: null };
+  } catch (err) {
+    return { data: null, failure: isNotFound(err) ? null : readFailure(err) ?? "unavailable" };
+  }
+}
+
+/** The data, or null when nothing is stored (404); a quota or outage error is thrown. */
+export async function storedRead<T>(p: Promise<T>, what: string): Promise<T | null> {
+  const result = await settle(p);
+  if (result.failure) throw new UpstreamReadError(result.failure, what);
+  return result.data;
+}
+
+/** A tool's error text: the quota or outage wording when that is what failed, else the fallback. */
+export function errorText(err: unknown, what: string, fallback: string): string {
+  const failure = readFailure(err);
+  return failure ? failureText(what, failure) : fallback;
 }
 
 function sameTicker(stock: Stock | null | undefined, ticker: string): boolean {
@@ -35,14 +112,22 @@ function sameTicker(stock: Stock | null | undefined, ticker: string): boolean {
  * expose /api/stocks/{ticker}.
  */
 export async function findExactStock(ticker: string): Promise<Stock | null> {
+  return (await readExactStock(ticker)).data;
+}
+
+/**
+ * {@link findExactStock}, keeping a failed lookup (quota, outage) apart from "no such
+ * listing": when neither read finds the ticker and either one failed, the failure is kept.
+ */
+export async function readExactStock(ticker: string): Promise<Settled<Stock>> {
   const normalized = ticker.trim().toUpperCase();
-  if (!normalized) return null;
+  if (!normalized) return { data: null, failure: null };
 
   const enc = encodeURIComponent(normalized);
-  const direct = await safe(bullrunGet<Stock>(`/api/stocks/${enc}`));
-  if (sameTicker(direct, normalized)) return direct;
+  const direct = await settle(bullrunGet<Stock>(`/api/stocks/${enc}`));
+  if (sameTicker(direct.data, normalized)) return direct;
 
-  const matches = await safe(
+  const matches = await settle(
     bullrunGet<Stock[]>("/api/stocks", {
       search: normalized,
       quoteType: "ALL",
@@ -52,7 +137,8 @@ export async function findExactStock(ticker: string): Promise<Stock | null> {
     }),
   );
 
-  return matches?.find((s) => sameTicker(s, normalized)) ?? null;
+  const found = matches.data?.find((s) => sameTicker(s, normalized)) ?? null;
+  return { data: found, failure: found ? null : direct.failure ?? matches.failure };
 }
 
 /**
@@ -86,25 +172,15 @@ function numericVariants(code: string): string[] {
   return hk ? [`${hk[1].padStart(4, "0")}.HK`] : [];
 }
 
-function isNotFound(err: unknown): boolean {
-  return err instanceof Error && /bullrun-api 404 /.test(err.message);
-}
-
 /**
  * GET /api/stocks/{ticker}: the listing, a retired ticker's survivor, or null when
  * there is none. Anything else -- unreachable API, quota, 5xx -- is thrown, so a
  * tool reports an outage instead of telling the user the company is not covered.
  */
 async function storedListing(ticker: string): Promise<Stock | null> {
-  try {
-    return await bullrunGet<Stock>(`/api/stocks/${encodeURIComponent(ticker)}`);
-  } catch (err) {
-    if (isNotFound(err)) return null;
-    const reason = err instanceof Error ? err.message : String(err);
-    throw new Error(/ 429 /.test(reason)
-      ? `Bullrun's request quota for this connection is used up (${reason.slice(0, 160)}). This is not a coverage answer; retry later.`
-      : `Bullrun's data API is not reachable right now (${reason.slice(0, 160)}). This is not a coverage answer; retry shortly.`);
-  }
+  const row = await storedRead(bullrunGet<Stock>(`/api/stocks/${encodeURIComponent(ticker)}`), "The ticker lookup");
+  if (row && typeof row.ticker !== "string") throw new UpstreamReadError("unavailable", "The ticker lookup");
+  return row;
 }
 
 /**

@@ -2,8 +2,8 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "org.bull-run/bullrun",
   "title": "Bullrun",
-  "description": "Global stock search, screens, price history, news, UCITS ETFs, risk and macro; no API key",
-  "version": "0.7.0",
+  "description": "Global stocks, ML valuation, UCITS ETF costs and company risks. Free public research; no API key.",
+  "version": "0.8.0",
   "repository": {
     "url": "https://github.com/ferinator/bullrun-mcp",
     "source": "github"

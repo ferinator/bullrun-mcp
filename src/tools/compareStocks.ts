@@ -3,9 +3,19 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet, config } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
 import { mapWithConcurrency, toolResult } from "./etfData.js";
-import { RISK_METHOD_NOTE, type RiskDialCluster } from "./riskData.js";
+import { RISK_METHOD_NOTE, round, type RiskDialCluster } from "./riskData.js";
 import { interpretScore, VALUATION_CAVEAT, type MlScore, type ModelKey } from "./valuationModelData.js";
-import type { Stock } from "./stockIdentity.js";
+import {
+  failureText,
+  readFailure,
+  resolveStockTicker,
+  TICKER_CONVENTION,
+  tickerNotFoundText,
+  tidy,
+  type ReadFailure,
+  type Stock,
+  type TickerResolution,
+} from "./stockIdentity.js";
 import { clipText } from "./textClip.js";
 
 const MODULES = ["fundamentals", "quality", "valuation", "risk"] as const;
@@ -53,7 +63,7 @@ interface ReadTask { ticker: string; source: Source; path: string; params?: Reco
 
 const inputSchema = {
   tickers: z.array(z.string().trim().min(1).max(40)).min(2).max(5)
-    .describe("Two to five distinct exact Bullrun stock listing tickers, e.g. AAPL, BMW, NESN or 005930. No fuzzy company names or inferred ticker suffixes."),
+    .describe("Two to five distinct Bullrun stock tickers, e.g. AAPL, BMW, NESN, 6324.T or 7203. " + TICKER_CONVENTION + " Company names are not accepted here."),
   include: z.array(z.enum(MODULES)).min(1).max(4).default([...MODULES])
     .describe("Selected compact modules. Fundamentals and quality use the latest usable ANNUAL fiscal year only; valuation includes stored multiples and Bullrun model context; risk includes measured dials."),
 };
@@ -136,14 +146,15 @@ function summarizeRisk(cluster: RiskDialCluster | null, ticker: string) {
   return {
     asOfDate: text(cluster?.asOfDate, 40),
     formulaVersion: text(cluster?.formulaVersion, 80),
+    // Whole points, as get_company_risk and the analysis page show them.
     composite: composite ? {
-      score: value(composite.score), band: text(composite.band, 40), state: text(composite.state, 40),
+      score: value(composite.displayScore) ?? round(value(composite.score), 0), band: text(composite.band, 40), state: text(composite.state, 40),
       direction: text(composite.direction, 40), weightProfile: text(composite.weightProfile, 80),
       inputsAvailable: value(composite.inputsAvailable), inputsRequired: value(composite.inputsRequired),
     } : null,
     compositeAbsentWhy: composite ? null : text(cluster?.compositeAbsentWhy, 400),
     dials: (cluster?.dials ?? []).slice(0, 6).map(dial => ({
-      mechanism: text(dial.key, 40), score: value(dial.score), band: text(dial.band, 40),
+      mechanism: text(dial.key, 40), score: round(value(dial.score), 0), band: text(dial.band, 40),
       state: text(dial.state, 40), direction: text(dial.direction, 40), waitingOn: text(dial.waitingOn, 400),
     })),
   };
@@ -153,7 +164,7 @@ export function registerCompareStocks(server: McpServer): void {
   server.registerTool("compare_stocks", {
     title: "Compare stocks",
     annotations: { readOnlyHint: true },
-    description: "Compare two to five exact stock tickers in one compact structured response: annual fundamentals and growth, quality ratios, stored valuation and Bullrun model context, and measured risk dials. Reports each fiscal year, source date, native quote/reporting currency and missing coverage. No currency conversion, quarterly-to-annual substitution, buy/sell ranking or generated research. Read-only.",
+    description: "Compare two to five stock tickers in one compact structured response: annual fundamentals and growth, quality ratios, stored valuation and Bullrun model context, and measured risk dials. Reports each fiscal year, source date, native quote/reporting currency and missing coverage. No currency conversion, quarterly-to-annual substitution, buy/sell ranking or generated research. Read-only.",
     inputSchema,
     outputSchema: {
       tickers: z.array(z.string()), requestedModules: z.array(z.enum(MODULES)), retrievedAt: z.string(),
@@ -163,15 +174,41 @@ export function registerCompareStocks(server: McpServer): void {
   }, async args => {
     try {
       requirePublicScope("read:market");
-      const tickers = [...new Set(args.tickers.map(ticker => ticker.trim().toUpperCase()))];
-      if (tickers.length < 2) throw new Error("At least two distinct stock tickers are required.");
+      const requested = [...new Set(args.tickers.map(ticker => ticker.trim().toUpperCase()))];
+      if (requested.length < 2) throw new Error("At least two distinct stock tickers are required.");
       const include = [...new Set<Module>(args.include)];
       const timeout = Number.isFinite(config.requestTimeoutMs) && config.requestTimeoutMs > 0
         ? Math.min(UPSTREAM_TIMEOUT_MS, config.requestTimeoutMs) : UPSTREAM_TIMEOUT_MS;
+      // The ticker lookup doubles as the identity read. One input at a time: a bare
+      // numeric code fans out to four venue lookups of its own.
+      const lookups = await mapWithConcurrency(requested, 1, async (input): Promise<{
+        input: string; resolution: TickerResolution | null; failure: ReadFailure | null;
+      }> => {
+        try {
+          return { input, resolution: await resolveStockTicker(input), failure: null };
+        } catch (err) {
+          return { input, resolution: null, failure: readFailure(err) ?? "unavailable" };
+        }
+      });
+      const warnings: string[] = [];
+      const tickers: string[] = [];
+      const identities = new Map<string, ReadResult>();
+      for (const { input, resolution, failure } of lookups) {
+        const ticker = resolution?.ticker?.toUpperCase() ?? input;
+        if (tickers.includes(ticker)) {
+          warnings.push(`${input} is the same listing as ${ticker}; it is compared once.`);
+          continue;
+        }
+        tickers.push(ticker);
+        identities.set(ticker, failure ? { status: "unavailable", data: null } : { status: "ok", data: resolution?.stock ?? null });
+        if (failure) warnings.push(`${input}: ${failureText("The ticker lookup", failure)}`);
+        else if (resolution?.note) warnings.push(resolution.note);
+        else if (resolution && !resolution.ticker) warnings.push(tickerNotFoundText(input, resolution));
+      }
+      if (tickers.length < 2) throw new Error(`These tickers name only one listing (${tickers[0]}); compare at least two different stocks.`);
       const tasks: ReadTask[] = [];
       for (const ticker of tickers) {
         const enc = encodeURIComponent(ticker);
-        tasks.push({ ticker, source: "identity", path: `/api/stocks/${enc}` });
         if (include.includes("fundamentals") || include.includes("quality")) {
           tasks.push({ ticker, source: "financials", path: `/api/financials/${enc}` });
         }
@@ -191,9 +228,8 @@ export function registerCompareStocks(server: McpServer): void {
           return { status: "unavailable", data: null };
         }
       });
-      const bundles = new Map(tickers.map(ticker => [ticker, new Map<Source, ReadResult>()]));
+      const bundles = new Map(tickers.map(ticker => [ticker, new Map<Source, ReadResult>([["identity", identities.get(ticker)!]])]));
       tasks.forEach((task, index) => bundles.get(task.ticker)!.set(task.source, reads[index]));
-      const warnings: string[] = [];
       const coverage: Array<Record<string, unknown>> = [];
       const rows = tickers.map(ticker => {
         const sources = bundles.get(ticker)!;
@@ -223,7 +259,6 @@ export function registerCompareStocks(server: McpServer): void {
         const endpoints = Object.fromEntries([...sources].map(([source, result]) => [source, result.status]));
         const unavailable = [...sources].filter(([, result]) => result.status !== "ok").map(([source]) => source);
         if (unavailable.length) warnings.push(`${ticker}: unavailable sources: ${unavailable.join(", ")}.`);
-        if (!stock) warnings.push(`${ticker}: no exact stock identity was returned; verify the native listing ticker with screen_stocks.`);
         if (nonStock) warnings.push(`${ticker}: quote type ${text(stock?.quoteType, 40)} is not a stock; use compare_etfs for ETFs.`);
         if (sources.has("financials") && !latest) warnings.push(`${ticker}: no usable annual financials; quarterly rows were not substituted.`);
         if (latest && !reportingCurrency) warnings.push(`${ticker}: reporting currency is unknown; absolute statement amounts cannot be compared across currencies.`);
@@ -249,9 +284,9 @@ export function registerCompareStocks(server: McpServer): void {
             country: text(stock.country, 80), primaryTicker: text(stock.primaryTicker, 40) } : null,
         };
         if (include.includes("fundamentals")) row.fundamentals = nonStock ? null : {
-          latestPrice: price ? { close: value(price.closePrice), asOfDate: text(price.tradeDate, 40), quoteCurrency: text(stock?.currency, 12) } : null,
+          latestPrice: price ? { close: tidy(price.closePrice), asOfDate: text(price.tradeDate, 40), quoteCurrency: text(stock?.currency, 12) } : null,
           annual: latest ? { basis: financialBasis(latest), revenue: value(latest.revenue), netIncome: value(latest.netIncome),
-            dilutedEps: value(latest.dilutedEps), operatingCashflow: value(latest.operatingCashflow), freeCashflow: value(latest.freeCashflow),
+            dilutedEps: tidy(latest.dilutedEps), operatingCashflow: value(latest.operatingCashflow), freeCashflow: value(latest.freeCashflow),
             totalDebt: value(latest.totalDebt), cash: value(latest.cashAndCashEquivalents),
             revenueGrowthYoyPct: comparableGrowth && previous!.revenue != null && previous!.revenue > 0 && value(latest.revenue) != null
               ? rounded((latest.revenue! - previous!.revenue) / previous!.revenue * 100) : null,
@@ -260,7 +295,7 @@ export function registerCompareStocks(server: McpServer): void {
         if (include.includes("quality")) row.quality = !nonStock && latest ? quality(latest) : null;
         if (include.includes("valuation")) row.valuation = nonStock ? null : {
           latest: valuation ? { asOfDate: text(valuation.tradeDate, 40), marketCap: value(valuation.marketCap), marketCapCurrency: null,
-            peRatio: value(valuation.peRatio), dividendYieldPct: value(valuation.dividendYield) } : null,
+            peRatio: tidy(valuation.peRatio, 5), dividendYieldPct: tidy(valuation.dividendYield, 5) } : null,
           models,
         };
         if (include.includes("risk")) row.risk = nonStock ? null : risk;

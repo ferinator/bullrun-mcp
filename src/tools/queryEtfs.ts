@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { safe, type Stock } from "./stockIdentity.js";
+import { errorText, failureText, NOT_REQUESTED, settle, type Settled, type Stock } from "./stockIdentity.js";
 
 interface EtfProfile {
   ticker: string;
@@ -171,25 +171,31 @@ export function registerQueryEtfs(server: McpServer): void {
         const exact = ticker
           ? rows.find((row) => row.ticker.toUpperCase() === ticker) ?? null
           : null;
-        let profile: EtfProfile | null = null;
-        let holdings: EtfHolding[] | null = null;
-        let prices: Price[] | null = null;
+        let profileRead: Settled<EtfProfile> = NOT_REQUESTED;
+        let holdingsRead: Settled<EtfHolding[]> = NOT_REQUESTED;
+        let pricesRead: Settled<Price[]> = NOT_REQUESTED;
 
         if (ticker) {
           const enc = encodeURIComponent(ticker);
-          const [profileResult, holdingsResult, pricesResult] = await Promise.all([
-            safe(bullrunGet<EtfProfile>(`/api/etfs/${enc}/profile`)),
+          // A failed detail read is named in the warnings and its field is null: a 429
+          // is never shown as an empty profile, price list or holdings list.
+          [profileRead, holdingsRead, pricesRead] = await Promise.all([
+            settle(bullrunGet<EtfProfile>(`/api/etfs/${enc}/profile`)),
             args.includeHoldings
-              ? safe(bullrunGet<EtfHolding[]>(`/api/etfs/${enc}/holdings`))
-              : Promise.resolve(null),
+              ? settle(bullrunGet<EtfHolding[]>(`/api/etfs/${enc}/holdings`))
+              : Promise.resolve(NOT_REQUESTED),
             args.priceLimit > 0
-              ? safe(bullrunGet<Price[]>(`/api/prices/${enc}`, { limit: args.priceLimit }))
-              : Promise.resolve(null),
+              ? settle(bullrunGet<Price[]>(`/api/prices/${enc}`, { limit: args.priceLimit }))
+              : Promise.resolve(NOT_REQUESTED),
           ]);
-          profile = profileResult;
-          holdings = holdingsResult;
-          prices = pricesResult;
         }
+        const holdings = holdingsRead.data;
+        const prices = pricesRead.data;
+        const warnings = ([
+          [`The fund profile of ${ticker}`, profileRead],
+          [`Prices for ${ticker}`, pricesRead],
+          [`Holdings for ${ticker}`, holdingsRead],
+        ] as const).flatMap(([what, read]) => read.failure ? [failureText(what, read.failure)] : []);
 
         const payload = {
           query: {
@@ -211,10 +217,11 @@ export function registerQueryEtfs(server: McpServer): void {
             ? {
                 ticker,
                 identity: exact ? toEtfSummary(exact) : null,
-                profile: toProfilePayload(profile),
-                prices: prices?.map(toPricePayload) ?? [],
-                holdingsReturned: holdings ? Math.min(holdings.length, args.holdingsLimit) : 0,
-                holdings: holdings?.slice(0, args.holdingsLimit).map(toHoldingPayload) ?? [],
+                profile: toProfilePayload(profileRead.data),
+                prices: pricesRead.failure ? null : prices?.map(toPricePayload) ?? [],
+                holdingsReturned: holdingsRead.failure ? null : holdings ? Math.min(holdings.length, args.holdingsLimit) : 0,
+                holdings: holdingsRead.failure ? null : holdings?.slice(0, args.holdingsLimit).map(toHoldingPayload) ?? [],
+                warnings,
               }
             : null,
         };
@@ -222,7 +229,7 @@ export function registerQueryEtfs(server: McpServer): void {
         return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        return { isError: true, content: [{ type: "text", text: `query_etfs failed: ${msg}` }] };
+        return { isError: true, content: [{ type: "text", text: errorText(err, "The ETF search", `query_etfs failed: ${msg}`) }] };
       }
     },
   );

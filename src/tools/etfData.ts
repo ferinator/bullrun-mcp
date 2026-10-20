@@ -1,5 +1,5 @@
 import { bullrunGet } from "../bullrun.js";
-import { safe, type Stock } from "./stockIdentity.js";
+import { settle, type Settled, type Stock } from "./stockIdentity.js";
 
 export interface EtfProfile {
   ticker: string;
@@ -28,6 +28,10 @@ export interface EtfProfile {
   source?: string | null;
   sourceUpdatedAt: string | null;
   updatedAt: string | null;
+  /** Asset class the API reads off this listing's raw columns (FundClassification), or null. */
+  assetClassLabel?: string | null;
+  /** Category, only where it refines the asset class ("Large Blend"), or null. */
+  categoryLabel?: string | null;
 }
 
 export interface EtfHolding {
@@ -63,10 +67,15 @@ export interface EtfPrice {
 }
 
 export async function findExactEtf(ticker: string): Promise<Stock | null> {
-  const normalized = ticker.trim().toUpperCase();
-  if (!normalized) return null;
+  return (await readExactEtf(ticker)).data;
+}
 
-  const matches = await safe(
+/** {@link findExactEtf}, keeping a failed lookup (quota, outage) apart from "no such listing". */
+export async function readExactEtf(ticker: string): Promise<Settled<Stock>> {
+  const normalized = ticker.trim().toUpperCase();
+  if (!normalized) return { data: null, failure: null };
+
+  const matches = await settle(
     bullrunGet<Stock[]>("/api/etfs", {
       search: normalized,
       includeSecondary: true,
@@ -74,7 +83,7 @@ export async function findExactEtf(ticker: string): Promise<Stock | null> {
       limit: 100,
     }),
   );
-  return matches?.find((row) => row.ticker?.toUpperCase() === normalized) ?? null;
+  return { data: matches.data?.find((row) => row.ticker?.toUpperCase() === normalized) ?? null, failure: matches.failure };
 }
 
 /** ETF profile ratios are stored as decimal fractions (0.002 = 0.2%). */
@@ -93,6 +102,34 @@ export function pctToFraction(value: number | null | undefined): number | null {
   return Number((value / 100).toFixed(10));
 }
 
+/**
+ * A listing's classification the way get_etf_fund states the fund's: the API's
+ * normalised asset class and refining category, with the provider's raw columns
+ * beside them only where they say something else.
+ *
+ * The raw asset_class mixes vocabularies across venues of ONE fund -- iShares MSCI
+ * Brazil is "Brazil" on IDBZ.L and the Xetra segment "EXCHANGE TRADED FUNDS - PASSIV"
+ * on IQQB.DE -- so it is never presented as the asset class. With no profile, the
+ * listing's sector is the crawler's normalised class already.
+ */
+export function etfClassification(
+  profile: EtfProfile | null,
+  row?: Pick<Stock, "sector"> | null,
+): Record<string, unknown> {
+  if (!profile) return { assetClass: row?.sector ?? null, category: null };
+  // An API that predates the labels sends neither key; read the raw columns then.
+  const assetClass = profile.assetClassLabel !== undefined ? profile.assetClassLabel : profile.assetClass;
+  const category = profile.categoryLabel !== undefined ? profile.categoryLabel : profile.category;
+  const provider = { assetClass: profile.assetClass ?? null, category: profile.category ?? null };
+  return {
+    assetClass: assetClass ?? null,
+    category: category ?? null,
+    ...(provider.assetClass !== (assetClass ?? null) || provider.category !== (category ?? null)
+      ? { providerClassification: provider }
+      : {}),
+  };
+}
+
 export function etfSummary(row: Stock, profile: EtfProfile | null): Record<string, unknown> {
   return {
     ticker: row.ticker,
@@ -100,8 +137,7 @@ export function etfSummary(row: Stock, profile: EtfProfile | null): Record<strin
     issuer: profile?.fundFamily ?? null,
     exchange: row.exchange,
     tradingCurrency: row.currency,
-    category: profile?.category ?? row.sector,
-    focus: profile?.assetClass ?? row.industry,
+    ...etfClassification(profile, row),
     region: profile?.region ?? null,
     domicile: profile?.domicile ?? row.country,
     isin: row.isin,

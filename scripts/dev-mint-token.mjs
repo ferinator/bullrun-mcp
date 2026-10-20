@@ -23,7 +23,7 @@
  *   TOKEN_ISS    issuer; must match BULLRUN_OAUTH_ISSUER + MCP_ISSUER (default http://localhost:8085)
  *   TOKEN_AUD    comma list; must contain the API audience AND the MCP resource id
  *                (default https://bull-run.org,https://mcp.bull-run.org)
- *   TOKEN_SCOPE  space list (default "read:market read:portfolios write:drafts")
+ *   TOKEN_SCOPE  space list (default "read:market read:portfolios write:drafts read:shortlist write:shortlist")
  *   JWK_KID      key id (default bullrun-oauth — must match BULLRUN_OAUTH_JWK_KID)
  */
 import { generateKeyPair, exportJWK, importJWK, SignJWT } from "jose";
@@ -39,7 +39,7 @@ const userId = Number(process.env.USER_ID ?? "1");
 const issuer = process.env.TOKEN_ISS ?? "http://localhost:8085";
 const audiences = (process.env.TOKEN_AUD ?? "https://bull-run.org,https://mcp.bull-run.org")
   .split(",").map((s) => s.trim()).filter(Boolean);
-const scope = process.env.TOKEN_SCOPE ?? "read:market read:portfolios write:drafts";
+const scope = process.env.TOKEN_SCOPE ?? "read:market read:portfolios write:drafts read:shortlist write:shortlist";
 const kid = process.env.JWK_KID ?? "bullrun-oauth";
 
 let jwk;

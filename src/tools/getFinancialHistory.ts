@@ -2,7 +2,8 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { identityPayload, resolveStockTicker, TICKER_CONVENTION, tickerNotFoundText } from "./stockIdentity.js";
+import { identityPayload, resolveStockTicker, TICKER_CONVENTION, tickerNotFoundText, tidy } from "./stockIdentity.js";
+import { reportedEbitdaWarnings } from "./financialQuality.js";
 
 interface Financials {
   ticker: string;
@@ -209,12 +210,12 @@ function toHistoryRow(row: Financials): HistoryRow {
       depreciationAndAmortization: row.depreciationAndAmortization,
     },
     perShare: {
-      basicEps: row.basicEps,
-      dilutedEps: row.dilutedEps,
+      basicEps: tidy(row.basicEps),
+      dilutedEps: tidy(row.dilutedEps),
       basicAverageShares: row.basicAverageShares,
       dilutedAverageShares: row.dilutedAverageShares,
-      dividendsPerShare: row.dividendsPerShare,
-      dividendYieldPct: row.dividendYieldPct,
+      dividendsPerShare: tidy(row.dividendsPerShare),
+      dividendYieldPct: tidy(row.dividendYieldPct, 5),
     },
     margins: {
       grossMarginPct: pct(row.grossProfit, row.revenue),
@@ -337,6 +338,12 @@ export function registerGetFinancialHistory(server: McpServer): void {
         if (!stock) warnings.push("No exact stock identity row was found; statement rows are still keyed by the requested ticker.");
         if (annual.length === 0 && periodType !== "quarterly") warnings.push("No annual financial rows found in the requested window.");
         if (quarterly.length === 0 && periodType !== "annual") warnings.push("No quarterly financial rows found in the requested window.");
+        warnings.push(...reportedEbitdaWarnings(selectedRows.map(row => ({
+          period: row.period,
+          ebit: row.incomeStatement.ebit,
+          ebitda: row.incomeStatement.ebitda,
+          depreciationAndAmortization: row.cashFlow.depreciationAndAmortization,
+        }))));
 
         const payload = {
           ticker,

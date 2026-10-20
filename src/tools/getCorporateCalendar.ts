@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet, config } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
 import { toolResult } from "./etfData.js";
+import { resolveStockTicker } from "./stockIdentity.js";
 
 const TYPES = ["earnings", "ex_dividend", "listings"] as const;
 type CalendarType = (typeof TYPES)[number];
@@ -41,7 +42,7 @@ const inputSchema = {
   listingMonths: z.number().int().min(1).max(60).default(12)
     .describe("Trailing months for recent listings. A nonblank q makes the backend search 60 months regardless of this value."),
   q: z.string().trim().max(100).optional()
-    .describe("Optional case-insensitive ticker or company-name contains search, also matched with spaces removed. This is not an exact ticker filter. A nonblank search widens earnings/ex-dividend to 120 days and listings to 60 months. % and _ act as search wildcards."),
+    .describe("Optional case-insensitive ticker or company-name contains search, also matched with spaces removed. This is not an exact ticker filter. A Yahoo-style symbol whose listing Bullrun stores in another form (BMW.DE as BMW, 7203.T as 7203) is searched under the stored ticker. A nonblank search widens earnings/ex-dividend to 120 days and listings to 60 months. % and _ act as search wildcards."),
   minCapUsd: z.number().finite().min(0).max(1_000_000_000_000_000).optional()
     .describe("Optional minimum market capitalization in USD. Omit to retain API defaults: 50 million for earnings/ex-dividend and zero for listings. Listings with unknown market cap are retained even with a positive floor."),
   limit: z.number().int().min(1).max(100).default(25)
@@ -98,7 +99,7 @@ export function registerGetCorporateCalendar(server: McpServer): void {
   server.registerTool("get_corporate_calendar", {
     title: "Get corporate calendar",
     annotations: { readOnlyHint: true },
-    description: "Read stored upcoming earnings and ex-dividend dates, plus recent equity listings. Supports ticker/company search and explicit effective windows, market-cap filters, native listing quote currencies, available source metadata and partial coverage. Recent first-trade dates are not confirmed IPOs or an upcoming IPO schedule. Calendar dates and estimates can change; missing events mean unknown coverage, never proof that no event exists. Read-only; at most three backend requests.",
+    description: "Read stored upcoming earnings and ex-dividend dates, plus recent equity listings. Supports ticker/company search and explicit effective windows, market-cap filters, native listing quote currencies, available source metadata and partial coverage. Recent first-trade dates are not confirmed IPOs or an upcoming IPO schedule. Calendar dates and estimates can change; missing events mean unknown coverage, never proof that no event exists. Read-only; at most three calendar requests, plus a ticker lookup when q carries a Yahoo exchange suffix.",
     inputSchema,
     outputSchema: {
       requestedTypes: z.array(z.enum(TYPES)), retrievedAt: z.string(),
@@ -113,12 +114,23 @@ export function registerGetCorporateCalendar(server: McpServer): void {
     }
     try {
       const include = [...new Set<CalendarType>(args.include)];
-      const q = args.q?.trim() || null;
+      const typed = args.q?.trim() || null;
+      const warnings: string[] = [];
+      // A contains search already finds 6324.T for "6324", but not BMW for "BMW.DE" or 7203
+      // for "7203.T". A Yahoo-suffixed symbol the resolver maps to another stored ticker is
+      // searched under that ticker; anything else is searched as typed.
+      let q = typed;
+      if (typed && /^[A-Z0-9][A-Z0-9^=_-]{0,30}\.[A-Z]{1,3}$/i.test(typed)) {
+        const resolution = await resolveStockTicker(typed).catch(() => null);
+        if (resolution?.ticker && !resolution.ticker.toUpperCase().includes(typed.toUpperCase())) {
+          q = resolution.ticker;
+          warnings.push(`q "${typed}" was searched as ${resolution.ticker}: ${resolution.note ?? "the stored Bullrun ticker."}`);
+        }
+      }
       const effectiveDays = q ? 120 : args.days;
       const effectiveListingMonths = q ? 60 : args.listingMonths;
       const timeout = Number.isFinite(config.requestTimeoutMs) && config.requestTimeoutMs > 0
         ? Math.min(UPSTREAM_TIMEOUT_MS, config.requestTimeoutMs) : UPSTREAM_TIMEOUT_MS;
-      const warnings: string[] = [];
       if (q) warnings.push("Search matches ticker/company text, not an exact ticker; the backend widens the forward window to 120 days and recent listings to 60 months. Inspect each calendar's effective window.");
       const calendars = await Promise.all(include.map(async type => {
         const minCapUsd = args.minCapUsd ?? (type === "listings" ? 0 : DEFAULT_MIN_CAP_USD);

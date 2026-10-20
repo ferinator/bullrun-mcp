@@ -89,7 +89,10 @@ async function startApp(env = {}) {
   child.stdout.on('data', chunk => { output += chunk })
   child.stderr.on('data', chunk => { output += chunk })
   const url = `http://127.0.0.1:${port}`
-  for (let attempt = 0; attempt < 150; attempt++) {
+  // Parallel suites can contend for module loading on Windows; bound readiness by
+  // elapsed time instead of assuming 150 short polling intervals cover startup.
+  const readyBy = Date.now() + 15000
+  while (Date.now() < readyBy) {
     if (child.exitCode !== null) throw new Error(`MCP server exited early: ${output}`)
     try {
       const health = await fetch(`${url}/health`, { signal: AbortSignal.timeout(200) })
@@ -172,6 +175,62 @@ after(async () => {
   await stopApp(app)
   apiServer?.closeAllConnections()
   if (apiServer) await new Promise(resolve => apiServer.close(resolve))
+})
+
+test('modern and compatibility HTTP catalogs have isolated sessions and preserve legacy preset calls', async () => {
+  const modern = { route: '/mcp', headers: {} }
+  const legacy = { route: '/legacy/mcp', headers: {} }
+  const modernSession = await initialize(modern)
+  const legacySession = await initialize(legacy)
+  const modernList = await rpc('tools/list', undefined, { ...modern, sessionId: modernSession })
+  const legacyList = await rpc('tools/list', undefined, { ...legacy, sessionId: legacySession })
+  const modernNames = modernList.body.result.tools.map(tool => tool.name)
+  const legacyNames = legacyList.body.result.tools.map(tool => tool.name)
+  assert.equal(modernNames.length, 48)
+  assert.equal(legacyNames.length, 52)
+  const before = calls.length
+  for (const name of ['query_etfs', 'screen_stock_presets', 'analyze_etf_overlap', 'analyze_portfolio_fit']) {
+    assert.equal(modernNames.includes(name), false)
+    assert.ok(legacyNames.includes(name))
+    const denied = await rpc('tools/call', { name, arguments: {} }, { ...modern, sessionId: modernSession })
+    assert.ok(denied.body.error || denied.body.result?.isError)
+  }
+  const listed = await rpc('tools/call', { name: 'screen_stock_presets', arguments: { action: 'list' } },
+    { ...legacy, sessionId: legacySession })
+  assert.ok(!listed.body.result.isError)
+  assert.equal(listed.body.result.structuredContent.action, 'list')
+  assert.ok(listed.body.result.structuredContent.presets.length > 0)
+  const modernPresets = await rpc('tools/call', { name: 'screen_stocks', arguments: { action: 'list_presets' } },
+    { ...modern, sessionId: modernSession })
+  assert.deepEqual(modernPresets.body.result.structuredContent.presets, listed.body.result.structuredContent.presets)
+  assert.equal(researchCallsSince(before).length, 0, 'listing presets and refusing aliases must not fetch research data')
+  for (const [options, wrongSession] of [[modern, legacySession], [legacy, modernSession]]) {
+    assert.equal((await rpc('ping', undefined, { ...options, sessionId: wrongSession })).status, 404)
+    for (const method of ['GET', 'DELETE']) {
+      const response = await fetch(`${base}${options.route}`, { method,
+        headers: { accept: 'application/json, text/event-stream', 'mcp-session-id': wrongSession } })
+      assert.equal(response.status, 404)
+    }
+  }
+  const trailing = await rpc('ping', undefined, { ...legacy, route: '/legacy/mcp/', sessionId: legacySession })
+  assert.equal(trailing.status, 200, trailing.text)
+  const upper = await rpc('tools/list', undefined, { ...legacy, route: '/LEGACY/MCP', sessionId: legacySession })
+  assert.equal(upper.status, 200, upper.text)
+  assert.equal(upper.body.result.tools.length, 52)
+  assert.equal((await rpc('ping', undefined, { ...legacy, route: '/LEGACY/MCP', sessionId: modernSession })).status, 404)
+})
+
+test('compatibility endpoints preserve public and login-required authentication gates', async () => {
+  for (const route of ['/account/mcp', '/account/legacy/mcp']) {
+    const response = await rpc('initialize', {}, { route, headers: {} })
+    assert.equal(response.status, 401)
+    assert.match(response.headers.get('www-authenticate'), /Bearer/)
+  }
+  const instance = await startApp({ MCP_REQUIRE_AUTH: 'true' })
+  try {
+    const response = await rpc('initialize', {}, { route: '/legacy/mcp', headers: {}, url: instance.url })
+    assert.equal(response.status, 401)
+  } finally { await stopApp(instance) }
 })
 
 test('public mcprush ownership claim is absent by default', async () => {

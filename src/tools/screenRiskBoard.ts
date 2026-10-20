@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { safe } from "./stockIdentity.js";
+import { failureText, NOT_REQUESTED, settle } from "./stockIdentity.js";
 import { toolResult } from "./etfData.js";
 import {
   BAND_SCALE,
@@ -69,7 +69,7 @@ export function registerScreenRiskBoard(server: McpServer): void {
     async (args) => {
       try {
         requirePublicScope("read:market");
-        const [board, slices] = await Promise.all([
+        const [board, slicesRead] = await Promise.all([
           bullrunGet<RiskBoard>("/api/company-intelligence/risk-board", {
             mechanism: args.mechanism === "OVERALL" ? undefined : args.mechanism,
             band: args.bands?.length ? args.bands.join(",") : undefined,
@@ -81,13 +81,16 @@ export function registerScreenRiskBoard(server: McpServer): void {
             offset: args.offset,
           }),
           args.includeSlices
-            ? safe(bullrunGet<{ sectors: BoardSlice[]; countries: BoardSlice[] }>(
+            ? settle(bullrunGet<{ sectors: BoardSlice[]; countries: BoardSlice[] }>(
                 "/api/company-intelligence/risk-board/slices", { minCompanies: 8, limit: 60 }))
-            : Promise.resolve(null),
+            : Promise.resolve(NOT_REQUESTED),
         ]);
+        const slices = slicesRead.data;
 
         const rows = (board.entries ?? []).map(compactBoardEntry);
         const warnings: string[] = [];
+        // Requested slices that failed to load are named, not silently left out.
+        if (slicesRead.failure) warnings.push(failureText("The sector and country slices", slicesRead.failure));
         if (!rows.length) {
           warnings.push("No scored companies match these filters. Sector and country must match exactly (includeSlices=true lists the covered values).");
         }

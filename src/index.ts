@@ -33,6 +33,9 @@ app.use(
  * connecting to one validates on the other.
  */
 const AUTH_MCP_PATH = process.env.MCP_AUTH_PATH ?? "/account/mcp";
+// Opt-in compatibility catalog for clients using the four v0.7 tool names.
+const LEGACY_MCP_PATH = "/legacy/mcp";
+const LEGACY_AUTH_MCP_PATH = "/account/legacy/mcp";
 
 app.get("/health", (_req: Request, res: Response) => {
   res.json({
@@ -46,6 +49,8 @@ app.get("/health", (_req: Request, res: Response) => {
       // Always-authenticated endpoint: 401-challenges anonymous callers into OAuth login
       // even when `required` is false (authless mode).
       loginEndpoint: AUTH_MCP_PATH,
+      legacyEndpoint: LEGACY_MCP_PATH,
+      legacyLoginEndpoint: LEGACY_AUTH_MCP_PATH,
     },
     sessions: { open: sessions.size, max: MAX_SESSIONS, idleTtlSeconds: Math.round(SESSION_IDLE_TTL_MS / 1000) },
     uptimeSeconds: Math.round(process.uptime()),
@@ -130,6 +135,8 @@ function authGate(alwaysRequire: boolean) {
 // that drives a Claude connector into the OAuth sign-in flow.
 app.use("/mcp", authGate(false));
 app.use(AUTH_MCP_PATH, authGate(true));
+app.use(LEGACY_MCP_PATH, authGate(false));
+app.use(LEGACY_AUTH_MCP_PATH, authGate(true));
 app.use(MCPRUSH_PATH, mcprushGate);
 
 /** Emit a 401 with the RFC 9728 challenge pointing at our Protected Resource Metadata. */
@@ -164,6 +171,8 @@ interface Session {
   transport: StreamableHTTPServerTransport;
   /** Marketplace transports cannot be reused by public routes or another installation. */
   gatewayOwner?: string;
+  /** Modern and compatibility sessions cannot be reused across catalogs. */
+  legacyTools: boolean;
   lastActivity: number;
   /** Requests still being answered, including an open GET SSE stream; never evicted while > 0. */
   inFlight: number;
@@ -228,10 +237,11 @@ async function handleMcpPost(req: Request, res: Response): Promise<void> {
   const sessionId = firstHeader(req.headers["mcp-session-id"]);
   const session = sessionId ? sessions.get(sessionId) : undefined;
   const gatewayOwner = gatewaySessionOwner();
+  const legacyTools = isLegacyCatalog(req);
   let transport: StreamableHTTPServerTransport;
 
   if (session) {
-    if (session.gatewayOwner !== gatewayOwner) {
+    if (session.gatewayOwner !== gatewayOwner || session.legacyTools !== legacyTools) {
       respondSessionNotFound(res);
       return;
     }
@@ -250,7 +260,7 @@ async function handleMcpPost(req: Request, res: Response): Promise<void> {
       sessionIdGenerator: () => randomUUID(),
       enableJsonResponse: gatewayOwner !== undefined,
       onsessioninitialized: (sid) => {
-        sessions.set(sid, { transport: created, gatewayOwner, lastActivity: Date.now(), inFlight: 0 });
+        sessions.set(sid, { transport: created, gatewayOwner, legacyTools, lastActivity: Date.now(), inFlight: 0 });
       },
     });
     // Set before connect(): the server wraps this handler rather than replacing it. The
@@ -259,7 +269,7 @@ async function handleMcpPost(req: Request, res: Response): Promise<void> {
       const sid = created.sessionId;
       if (sid && sessions.get(sid)?.transport === created) sessions.delete(sid);
     };
-    const server = createMcpServer({ researchOnly: gatewayOwner !== undefined });
+    const server = createMcpServer({ researchOnly: gatewayOwner !== undefined, legacyTools });
     await server.connect(created);
     transport = created;
   }
@@ -282,6 +292,8 @@ async function handleMcpPost(req: Request, res: Response): Promise<void> {
 // not by path, so a session started on either endpoint resolves the same transport.
 app.post("/mcp", handleMcpPost);
 app.post(AUTH_MCP_PATH, handleMcpPost);
+app.post(LEGACY_MCP_PATH, handleMcpPost);
+app.post(LEGACY_AUTH_MCP_PATH, handleMcpPost);
 app.post(MCPRUSH_PATH, handleMcpPost);
 app.all(MCPRUSH_PATH, (_req: Request, res: Response) => {
   res.setHeader("Allow", "POST");
@@ -296,7 +308,8 @@ async function handleSessionRequest(req: Request, res: Response): Promise<void> 
     return;
   }
   const session = sessions.get(sessionId);
-  if (!session || session.gatewayOwner !== gatewaySessionOwner()) {
+  const legacyTools = isLegacyCatalog(req);
+  if (!session || session.gatewayOwner !== gatewaySessionOwner() || session.legacyTools !== legacyTools) {
     respondSessionNotFound(res);
     return;
   }
@@ -307,6 +320,10 @@ app.get("/mcp", handleSessionRequest);
 app.delete("/mcp", handleSessionRequest);
 app.get(AUTH_MCP_PATH, handleSessionRequest);
 app.delete(AUTH_MCP_PATH, handleSessionRequest);
+app.get(LEGACY_MCP_PATH, handleSessionRequest);
+app.delete(LEGACY_MCP_PATH, handleSessionRequest);
+app.get(LEGACY_AUTH_MCP_PATH, handleSessionRequest);
+app.delete(LEGACY_AUTH_MCP_PATH, handleSessionRequest);
 
 app.listen(config.port, () => {
   console.log(`bullrun-mcp listening on :${config.port} (MCP at /mcp, health at GET /health)`);
@@ -344,6 +361,11 @@ function mcpUsageFromRequest(req: Request): McpUsageContext | undefined {
 
 function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
+}
+
+function isLegacyCatalog(req: Request): boolean {
+  const path = req.path.toLowerCase().replace(/\/+$/, "");
+  return path === LEGACY_MCP_PATH || path === LEGACY_AUTH_MCP_PATH;
 }
 
 function envPositiveInt(name: string, fallback: number): number {

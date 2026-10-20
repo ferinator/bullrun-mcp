@@ -3,6 +3,7 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requireUserScope } from "../auth/scopes.js";
 import { parsePrivacyMode } from "../privacy.js";
+import { calculatePortfolioLookThroughFit, EXACT_FIT_TICKER } from "./portfolioFitData.js";
 
 function redactMoney(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(redactMoney);
@@ -83,7 +84,7 @@ export function registerGetPortfolioAnalytics(server: McpServer): void {
       title: "Get portfolio analytics",
       annotations: { readOnlyHint: true },
       description:
-        "Use when the user asks about THEIR portfolio's risk, diversification, or concentration, or whether to add a stock — e.g. \"is my portfolio diversified\", \"how risky is my portfolio\", \"am I too concentrated\", \"what's my exposure to X\", \"should I add NVDA\", \"would AAPL improve my diversification\". Fetches portfolio-level relationship analytics for one signed-in user's portfolio: correlation and annualized covariance matrices across holdings, contribution-to-risk, concentration by weight and risk, currency/sector/country exposures, value/growth/momentum/quality/size proxy factor scores, scenario/stress tests (rates +100bp, oil -20%, USD +10%), and optional candidateTicker fit analysis showing correlation to the current portfolio plus pro-forma volatility (set candidateTicker when the user asks whether to add a specific stock). Pass a portfolioId from list_portfolios. The risk math only covers holdings with enough price history, dropping unpriced/unmatched ones (ETFs, funds, untracked tickers) and renormalizing all percentages over what remains; the response leads with a `coverage` banner (first text block) stating how many holdings were excluded, so never read these figures as the whole portfolio. For a plain holdings/value snapshot and the full matched/unmatched breakdown use get_portfolio_context instead. Requires OAuth (read:portfolios) and returns the caller's own data only. privacyMode defaults to \"full\"; \"weights_only\" hides absolute USD amounts while keeping weights, percentages, correlations and scores.",
+        "Use when the user asks about THEIR portfolio's risk, diversification, or concentration, or whether to add a stock or ETF — e.g. \"is my portfolio diversified\", \"how risky is my portfolio\", \"am I too concentrated\", \"what's my exposure to X\", \"should I add NVDA\", \"would AAPL improve my diversification\". Fetches portfolio-level relationship analytics for one signed-in user's portfolio: correlation and annualized covariance matrices across holdings, contribution-to-risk, concentration by weight and risk, currency/sector/country exposures, value/growth/momentum/quality/size proxy factor scores, scenario/stress tests (rates +100bp, oil -20%, USD +10%), and optional candidateTicker fit analysis showing correlation to the current portfolio plus pro-forma volatility (set candidateTicker when the user asks whether to add a specific stock or ETF). Set includeLookThrough=true with candidateTicker to add duplicate direct/ETF-contained underlying securities in separate lookThroughFit, lookThroughCoverage and lookThroughWarnings fields; this is opt-in and uses a priced-position denominator independent of the risk-history subset. Partial ETF snapshots make duplicate exposure a lower bound. Pass a portfolioId from list_portfolios. The risk math only covers holdings with enough price history, dropping unpriced/unmatched ones (ETFs, funds, untracked tickers) and renormalizing all percentages over what remains; the response leads with a `coverage` banner (first text block) stating how many holdings were excluded, so never read these figures as the whole portfolio. For a plain holdings/value snapshot and the full matched/unmatched breakdown use get_portfolio_context instead. Requires OAuth (read:portfolios) and returns the caller's own data only. privacyMode defaults to \"full\"; \"weights_only\" hides absolute USD amounts while keeping weights, percentages, correlations and scores.",
       inputSchema: {
         portfolioId: z
           .number()
@@ -101,22 +102,29 @@ export function registerGetPortfolioAnalytics(server: McpServer): void {
           .string()
           .min(1)
           .optional()
-          .describe("Optional exact Bullrun ticker to test as a candidate diversifier - the native local-exchange symbol, e.g. AAPL, BMW, ABBN, NESN (not Yahoo-style suffixes like BMW.DE)."),
+          .describe("Optional exact Bullrun stock or ETF listing ticker to test as a candidate diversifier, e.g. AAPL, BMW, ABBN, NESN or SPY. Use the stored listing ticker; do not infer exchange suffixes."),
         candidateWeightPct: z
           .number()
           .min(0)
           .max(50)
           .optional()
           .describe("Optional hypothetical candidate allocation for pro-forma volatility. Default 5 (%)."),
+        includeLookThrough: z
+          .boolean()
+          .default(false)
+          .describe("Also compare an exact stock or ETF candidate against direct holdings and stored ETF constituents. Requires candidateTicker. Default false: no underlying holdings requests. Look-through has separate priced-position coverage from price-history risk analytics."),
         privacyMode: z
           .enum(["full", "weights_only"])
           .optional()
           .describe('"full" (default) includes absolute USD amounts; "weights_only" returns only relative figures.'),
       },
     },
-    async ({ portfolioId, days, candidateTicker, candidateWeightPct, privacyMode }) => {
+    async ({ portfolioId, days, candidateTicker, candidateWeightPct, includeLookThrough, privacyMode }) => {
       try {
         requireUserScope("read:portfolios");
+        if (includeLookThrough && (!candidateTicker?.trim() || !EXACT_FIT_TICKER.test(candidateTicker.trim()))) {
+          return { isError: true, content: [{ type: "text", text: "includeLookThrough requires candidateTicker to be an exact Bullrun stock or ETF listing ticker." }] };
+        }
         const mode = parsePrivacyMode(privacyMode);
         const payload = await bullrunGet<unknown>(`/api/portfolios/${portfolioId}/risk`, {
           days: days ?? 370,
@@ -124,7 +132,20 @@ export function registerGetPortfolioAnalytics(server: McpServer): void {
           candidateWeightPct: candidateWeightPct ?? 5,
         });
 
-        const view = mode === "weights_only" ? redactMoney(payload) : payload;
+        const lookThrough = includeLookThrough ? await calculatePortfolioLookThroughFit({
+          portfolioId,
+          candidateTicker: candidateTicker!,
+          candidateWeightPct: candidateWeightPct ?? 5,
+        }).catch(() => ({ lookThroughFit: null, coverage: { status: "unavailable" },
+          warnings: ["Portfolio holdings look-through could not be loaded. Existing duplicate exposure is unknown; price-history analytics retain their own coverage."] })) : null;
+        const enriched = lookThrough ? {
+          ...(payload != null && typeof payload === "object" && !Array.isArray(payload)
+            ? payload as Record<string, unknown> : { payload }),
+          lookThroughFit: lookThrough.lookThroughFit,
+          lookThroughCoverage: lookThrough.coverage,
+          lookThroughWarnings: lookThrough.warnings,
+        } : payload;
+        const view = mode === "weights_only" ? redactMoney(enriched) : enriched;
         const body =
           view != null && typeof view === "object" && !Array.isArray(view)
             ? { privacyMode: mode, ...(view as Record<string, unknown>) }
@@ -138,7 +159,9 @@ export function registerGetPortfolioAnalytics(server: McpServer): void {
           payload != null && typeof payload === "object"
             ? ((payload as Record<string, unknown>).coverage as RiskCoverage | undefined)
             : undefined;
-        const banner = analyticsCoverageBanner(cov);
+        const banner = analyticsCoverageBanner(cov) + (includeLookThrough
+          ? " Optional holdings look-through has separate coverage in lookThroughCoverage; the risk exclusions above apply to price-history analytics."
+          : "");
 
         return {
           content: [

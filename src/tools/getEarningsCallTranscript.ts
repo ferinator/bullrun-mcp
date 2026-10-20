@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { findExactStock, identityPayload } from "./stockIdentity.js";
+import { errorText, identityPayload, resolveStockTicker, TICKER_CONVENTION, tickerNotFoundText } from "./stockIdentity.js";
 
 interface TranscriptChunk {
   ticker: string;
@@ -30,7 +30,7 @@ function truncate(text: string, maxChars: number): { text: string; truncated: bo
 
 const inputSchema = {
   ticker: z.string().min(1)
-    .describe("The ticker exactly as listed on Bullrun, e.g. \"CRWD\", \"SPGI\", \"V\"."),
+    .describe("Bullrun ticker, e.g. \"CRWD\", \"SPGI\", \"V\". " + TICKER_CONVENTION),
   fiscalYear: z.number().int().min(1900).max(2200).optional()
     .describe("Optional fiscal year filter."),
   fiscalQuarter: z.number().int().min(1).max(4).optional()
@@ -56,19 +56,19 @@ export function registerGetEarningsCallTranscript(server: McpServer): void {
     async (args) => {
       try {
         requirePublicScope("read:market");
-        const ticker = args.ticker.trim().toUpperCase();
-        if (!ticker) return { isError: true, content: [{ type: "text", text: "ticker is required" }] };
+        if (!args.ticker.trim()) return { isError: true, content: [{ type: "text", text: "ticker is required" }] };
+        const resolution = await resolveStockTicker(args.ticker);
+        if (!resolution.ticker) return { content: [{ type: "text", text: tickerNotFoundText(args.ticker, resolution) }] };
+        const ticker = resolution.ticker.toUpperCase();
+        const identity = resolution.stock;
 
         const enc = encodeURIComponent(ticker);
-        const [identity, rows] = await Promise.all([
-          findExactStock(ticker),
-          bullrunGet<TranscriptChunk[]>(`/api/company-intelligence/${enc}/earnings-call-transcripts`, {
-            fiscalYear: args.fiscalYear,
-            fiscalQuarter: args.fiscalQuarter,
-            q: args.search,
-            limit: args.maxChunks,
-          }),
-        ]);
+        const rows = await bullrunGet<TranscriptChunk[]>(`/api/company-intelligence/${enc}/earnings-call-transcripts`, {
+          fiscalYear: args.fiscalYear,
+          fiscalQuarter: args.fiscalQuarter,
+          q: args.search,
+          limit: args.maxChunks,
+        });
 
         const chunks = rows ?? [];
         let truncatedChunks = 0;
@@ -92,6 +92,7 @@ export function registerGetEarningsCallTranscript(server: McpServer): void {
 
         const payload = {
           ticker,
+          ...(resolution.note ? { tickerResolution: resolution.note } : {}),
           identity: identityPayload(identity),
           coverage: {
             chunks: chunks.length,
@@ -111,8 +112,9 @@ export function registerGetEarningsCallTranscript(server: McpServer): void {
         };
 
         return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
-      } catch {
-        return { isError: true, content: [{ type: "text", text: "Earnings-call transcripts could not be loaded. Check the exact Bullrun ticker and market-data access, then retry later; no refresh completion can be confirmed." }] };
+      } catch (err) {
+        return { isError: true, content: [{ type: "text", text: errorText(err, "Earnings-call transcripts",
+          "Earnings-call transcripts could not be loaded. Check the exact Bullrun ticker and market-data access, then retry later; no refresh completion can be confirmed.") }] };
       }
     },
   );

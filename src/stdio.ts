@@ -4,4 +4,4 @@ import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 // API default before importing modules whose configuration is read at load time.
 process.env.BULLRUN_API_BASE ??= "https://bull-run.org";
 const { createMcpServer } = await import("./mcpServer.js");
-await createMcpServer().connect(new StdioServerTransport());
+await createMcpServer({ legacyTools: process.argv.includes("--legacy-tools") }).connect(new StdioServerTransport());

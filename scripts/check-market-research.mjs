@@ -12,7 +12,7 @@ import { StdioClientTransport, getDefaultEnvironment } from "@modelcontextprotoc
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 
-const REQUIRED_TOOLS = ["search_stocks", "screen_stock_presets", "find_stock_peers", "get_stock_price_history", "get_company_news"];
+const REQUIRED_TOOLS = ["search_stocks", "screen_stocks", "find_stock_peers", "get_stock_price_history", "get_company_news"];
 const TIMEOUT_MS = 30_000;
 const CLIENT_NAME = "bullrun-market-research-inspection-probe";
 const HELP = `Usage:
@@ -155,7 +155,7 @@ async function run(config) {
       assert.ok(data.candidates.every(row => row.isin === "CH0038863350"), "ISIN candidates must match the requested security");
       return summary;
     });
-    await check("preset catalogue", "screen_stock_presets", { action: "list" }, data => {
+    await check("preset catalogue", "screen_stocks", { action: "list_presets" }, data => {
       const presets = requireArray(data.presets, "presets");
       const value = presets.find(row => row.key === "profitable_value");
       assert.ok(value, "profitable_value preset missing");
@@ -164,7 +164,7 @@ async function run(config) {
       }
       return { presets: presets.map(row => row.key), annualLookback: value.defaultLookback };
     });
-    await check("Germany profitable value", "screen_stock_presets", { action: "run", preset: "profitable_value", countries: ["Germany"], limit: 3 }, data => {
+    await check("Germany profitable value", "screen_stocks", { action: "run", preset: "profitable_value", countries: ["Germany"], limit: 3 }, data => {
       const rows = requireArray(data.results, "results");
       assert.ok(rows.length > 0 && rows.length <= 3, "expected 1-3 German profitable value results");
       for (const row of rows) {

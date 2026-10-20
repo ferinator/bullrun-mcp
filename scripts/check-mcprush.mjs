@@ -12,14 +12,17 @@ const HELP = `Usage: node scripts/check-mcprush.mjs [endpoint] [--research] [--t
 
 Default endpoint: ${DEFAULT_ENDPOINT}
 Secrets are accepted only through environment variables; never put them in arguments.
-  MCPRUSH_TOKEN          Gateway token, required for authenticated checks
+  MCPRUSH_TOKEN          Publisher origin token, required for authenticated checks
   MCPRUSH_LISTING_ID     Exact Studio listing ID (default: bullrun)
   MCPRUSH_INSTALL_ID     Real free-tier installation ID, required with --research
 
-The default check verifies token rejection, initialize, tools/list and ping.
+This checker calls the publisher origin directly, bypassing the MCPRush buyer gateway.
+The default check verifies origin token rejection, initialize, tools/list and ping.
 It makes zero tools/call requests. --research explicitly adds one AAPL/MSFT
-comparison with fundamentals and quality (at most 6 backend reads). This call
-can consume a marketplace allowance. Each request times out within 40 seconds.
+comparison with fundamentals and quality (at most 6 backend reads) to test origin
+execution and backend installation safety metering only. Neither mode verifies
+marketplace monthly/per-minute allowances or consumes a gateway allowance.
+Each request times out within 40 seconds.
 Only HTTPS and local loopback HTTP endpoints are accepted. Redirects are refused.
 `
 
@@ -196,8 +199,9 @@ async function run(options, env) {
   console.log('PASS authenticated session ping.')
 
   if (!options.research) {
-    console.log('READY for Studio verification. Research execution is untested; zero tools/call requests were sent.')
-    console.log('To test data and installation metering, set MCPRUSH_INSTALL_ID and rerun with --research (one tool call; at most 6 backend reads).')
+    console.log('READY for Studio verification of origin discovery. Research execution is untested; zero tools/call requests were sent.')
+    console.log('To test origin execution and backend installation safety metering only, set MCPRUSH_INSTALL_ID and rerun with --research (one tool call; at most 6 backend reads).')
+    console.log('These origin checks bypass the MCPRush buyer gateway; marketplace monthly/per-minute allowances are neither verified nor consumed.')
     return
   }
   const comparison = await rpc('tools/call', { name: 'compare_stocks',
@@ -222,7 +226,8 @@ async function run(options, env) {
     throw new CheckFailure('FAIL: stock comparison lacks usable annual fundamentals/quality for both test stocks. Check API credentials, metering and data coverage before charging.')
   }
   console.log('PASS AAPL/MSFT comparison returned annual fundamentals, quality and coverage.')
-  console.log('READY for Studio end-to-end review. One tools/call request was sent (at most 6 backend reads); confirm mcprush_market metering in API logs before launch.')
+  console.log('READY for Studio origin execution review. One tools/call request was sent (at most 6 backend reads); confirm mcprush_market metering in API logs to verify backend installation safety metering.')
+  console.log('This origin execution check bypasses the MCPRush buyer gateway; marketplace monthly/per-minute allowances are neither verified nor consumed.')
 }
 
 try {

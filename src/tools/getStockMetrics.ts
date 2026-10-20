@@ -2,7 +2,16 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { identityPayload, resolveStockTicker, safe, TICKER_CONVENTION, tickerNotFoundText, tidy } from "./stockIdentity.js";
+import {
+  failureText,
+  identityPayload,
+  resolveStockTicker,
+  settle,
+  TICKER_CONVENTION,
+  tickerNotFoundText,
+  tidy,
+} from "./stockIdentity.js";
+import { reportedEbitdaWarnings } from "./financialQuality.js";
 
 interface Valuation {
   ticker: string;
@@ -31,7 +40,9 @@ interface Financials {
   revenue: number | null;
   grossProfit: number | null;
   operatingIncome: number | null;
+  ebit?: number | null;
   ebitda: number | null;
+  depreciationAndAmortization?: number | null;
   netIncome: number | null;
   dilutedEps: number | null;
   freeCashflow: number | null;
@@ -90,16 +101,30 @@ export function registerGetStockMetrics(server: McpServer): void {
         const identity = resolution.stock;
         const enc = encodeURIComponent(ticker);
 
-        const [valuations, prices, financials, profile] = await Promise.all([
-          safe(bullrunGet<Valuation[]>(`/api/valuations/${enc}`, { limit: 1 })),
-          safe(bullrunGet<Price[]>(`/api/prices/${enc}`, { limit: 1 })),
-          safe(bullrunGet<Financials[]>(`/api/financials/${enc}`)),
-          safe(bullrunGet<Profile>(`/api/stocks/${enc}/profile`)),
+        // Each read keeps its own failure: a 429 on one of them is no evidence that
+        // nothing is stored, so its section is null with a warning that says why.
+        const [valuationsRead, pricesRead, financialsRead, profileRead] = await Promise.all([
+          settle(bullrunGet<Valuation[]>(`/api/valuations/${enc}`, { limit: 1 })),
+          settle(bullrunGet<Price[]>(`/api/prices/${enc}`, { limit: 1 })),
+          settle(bullrunGet<Financials[]>(`/api/financials/${enc}`)),
+          settle(bullrunGet<Profile>(`/api/stocks/${enc}/profile`)),
         ]);
+        const reads = [
+          ["The latest valuation", valuationsRead],
+          ["The latest price", pricesRead],
+          ["The latest reported financials", financialsRead],
+          ["The company description and website", profileRead],
+        ] as const;
+        if (reads.every(([, read]) => read.failure)) {
+          const failure = reads.some(([, read]) => read.failure === "quota") ? "quota" : "unavailable";
+          return { isError: true, content: [{ type: "text", text: `get_stock_metrics: ${failureText(`Metrics for ${ticker}`, failure)}` }] };
+        }
+        const failed = reads.flatMap(([what, read]) => read.failure ? [failureText(what, read.failure)] : []);
 
-        const valuation = valuations?.[0] ?? null;
-        const price = prices?.[0] ?? null;
-        const fin = pickLatestFinancials(financials);
+        const valuation = valuationsRead.data?.[0] ?? null;
+        const price = pricesRead.data?.[0] ?? null;
+        const fin = pickLatestFinancials(financialsRead.data);
+        const profile = profileRead.data;
 
         const summary = profile?.longBusinessSummary ?? null;
         const payload = {
@@ -148,6 +173,15 @@ export function registerGetStockMetrics(server: McpServer): void {
             : null,
           description: summary ? (summary.length > 900 ? `${summary.slice(0, 900)}...` : summary) : null,
           website: profile?.website ?? null,
+          warnings: [
+            ...failed,
+            ...(fin ? reportedEbitdaWarnings([{
+              period: periodLabel(fin.fiscalYear, fin.fiscalQuarter),
+              ebit: fin.ebit,
+              ebitda: fin.ebitda,
+              depreciationAndAmortization: fin.depreciationAndAmortization,
+            }]) : []),
+          ],
         };
 
         return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };

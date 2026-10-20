@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { safe } from "./stockIdentity.js";
+import { failureText, NOT_REQUESTED, safe, settle, storedRead } from "./stockIdentity.js";
 import { pricesAscending } from "./etfAnalytics.js";
 import { toolResult, type EtfPrice, type EtfProfile } from "./etfData.js";
 
@@ -102,17 +102,19 @@ export function registerGetEtfTimeseries(server: McpServer): void {
         const requestedSeries = [...new Set(args.series)];
         const needsFundPrices = requestedSeries.includes("price") || requestedSeries.includes("price_return");
         const benchmarkTicker = args.benchmarkTicker?.trim().toUpperCase() ?? null;
-        const [profile, priceRows, benchmarkRows] = await Promise.all([
+        // The profile only names the benchmark. A failed price read throws or is named in
+        // the warnings: a 429 is not "no price history was found".
+        const [profile, priceRows, benchmarkRead] = await Promise.all([
           safe(bullrunGet<EtfProfile>(`/api/etfs/${encodeURIComponent(ticker)}/profile`)),
           needsFundPrices
-            ? safe(bullrunGet<EtfPrice[]>(`/api/prices/${encodeURIComponent(ticker)}`, { limit: args.limit }))
+            ? storedRead(bullrunGet<EtfPrice[]>(`/api/prices/${encodeURIComponent(ticker)}`, { limit: args.limit }), `Prices for ${ticker}`)
             : Promise.resolve(null),
           requestedSeries.includes("benchmark") && benchmarkTicker
-            ? safe(bullrunGet<EtfPrice[]>(`/api/prices/${encodeURIComponent(benchmarkTicker)}`, { limit: args.limit }))
-            : Promise.resolve(null),
+            ? settle(bullrunGet<EtfPrice[]>(`/api/prices/${encodeURIComponent(benchmarkTicker)}`, { limit: args.limit }))
+            : Promise.resolve(NOT_REQUESTED),
         ]);
         const prices = pricesAscending(priceRows, args.startDate, args.endDate);
-        const benchmarkPrices = pricesAscending(benchmarkRows, args.startDate, args.endDate);
+        const benchmarkPrices = pricesAscending(benchmarkRead.data, args.startDate, args.endDate);
         const output: Record<string, unknown> = {};
         const availableSeries: z.infer<typeof seriesType>[] = [];
         const unavailableSeries: z.infer<typeof seriesType>[] = [];
@@ -140,7 +142,9 @@ export function registerGetEtfTimeseries(server: McpServer): void {
         if (unavailableSeries.includes("total_return")) warnings.push("Distribution-adjusted total-return history is not stored; use price_return only when price performance is acceptable.");
         if (unavailableSeries.includes("premium_discount")) warnings.push("Premium/discount requires aligned market-price and historical NAV series, which are not currently stored.");
         if (unavailableSeries.includes("benchmark")) warnings.push(
-          benchmarkTicker ? `No price history was found for benchmarkTicker ${benchmarkTicker}.` : "benchmark requires an explicit benchmarkTicker; a benchmark name is not a safe ticker mapping.",
+          !benchmarkTicker ? "benchmark requires an explicit benchmarkTicker; a benchmark name is not a safe ticker mapping."
+            : benchmarkRead.failure ? failureText(`Benchmark prices for ${benchmarkTicker}`, benchmarkRead.failure)
+              : `No price history was found for benchmarkTicker ${benchmarkTicker}.`,
         );
 
         return toolResult({

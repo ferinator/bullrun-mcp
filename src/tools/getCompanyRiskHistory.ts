@@ -4,6 +4,7 @@ import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
 import { toolResult } from "./etfData.js";
 import { RISK_METHOD_NOTE } from "./riskData.js";
+import { errorText, resolveStockTicker, storedRead, TICKER_CONVENTION, tickerNotFoundText } from "./stockIdentity.js";
 
 type Row = Record<string, unknown>;
 const record = (value: unknown): Row => value != null && typeof value === "object" && !Array.isArray(value) ? value as Row : {};
@@ -16,7 +17,7 @@ export function registerGetCompanyRiskHistory(server: McpServer): void {
     annotations: { readOnlyHint: true },
     description: "Stored historical company risk category readings and their observed input changes. Shows dates, computation times, formula versions, score changes, changing input coverage and measurement bases. Use for 'how has X's risk changed?' and 'which inputs changed?'. These are retained category scores, not a complete daily series or proof of causation. Missing history is unknown, never a zero risk score. Read-only; does not run risk computation or paid discovery.",
     inputSchema: {
-      ticker: z.string().trim().min(1).max(32).describe("Exact native Bullrun company ticker, e.g. AAPL or SAP."),
+      ticker: z.string().trim().min(1).max(32).describe("Bullrun company ticker, e.g. AAPL, SAP or 6324.T. " + TICKER_CONVENTION),
       limit: z.number().int().min(1).max(30).default(6).describe("Latest stored run dates to return, oldest first. Retention and gaps vary. Full detail supports at most six dates."),
       detail: z.enum(["summary", "full"]).default("summary").describe("Summary keeps scores, explanations and up to three changed inputs per category; full includes stored input terms and all returned term changes."),
     },
@@ -24,9 +25,23 @@ export function registerGetCompanyRiskHistory(server: McpServer): void {
     try { requirePublicScope("read:market"); }
     catch { return { isError: true, content: [{ type: "text", text: 'get_company_risk_history requires the "read:market" scope.' }] }; }
     try {
-      const ticker = rawTicker.trim().toUpperCase();
+      let ticker = rawTicker.trim().toUpperCase();
       if (detail === "full" && limit > 6) return { isError: true, content: [{ type: "text", text: "Full risk history supports at most six stored dates. Reduce limit or use summary detail." }] };
-      const data = await bullrunGet<Row>(`/api/stocks/${encodeURIComponent(ticker)}/risk-history`, { limit }, 8_000);
+      let note: string | null = null;
+      const read = (symbol: string) => storedRead(
+        bullrunGet<Row>(`/api/stocks/${encodeURIComponent(symbol)}/risk-history`, { limit }, 8_000), "Company risk history");
+      let data = await read(ticker);
+      if (!data) {
+        // The endpoint matches stored tickers exactly. Only a miss pays for resolving a bare
+        // code (6324 -> 6324.T), a Yahoo suffix or a retired ticker.
+        const resolution = await resolveStockTicker(ticker);
+        const resolved = resolution.ticker?.toUpperCase();
+        if (!resolved) return { isError: true, content: [{ type: "text", text: tickerNotFoundText(rawTicker, resolution) }] };
+        if (resolved !== ticker) data = await read(resolved);
+        if (!data) return { isError: true, content: [{ type: "text", text: `Bullrun lists ${resolved}, but returned no risk history for it; retry later.` }] };
+        ticker = resolved;
+        note = resolution.note;
+      }
       if (typeof data.ticker !== "string" || data.ticker.toUpperCase() !== ticker || !Array.isArray(data.history)) {
         return { isError: true, content: [{ type: "text", text: "Risk history returned an unexpected company identity or data shape." }] };
       }
@@ -48,7 +63,8 @@ export function registerGetCompanyRiskHistory(server: McpServer): void {
         }),
       }));
       const payload = {
-        ticker, companyName: data.companyName ?? null, requestedDates: limit, returnedDates: history.length,
+        ticker, ...(note ? { tickerResolution: note } : {}),
+        companyName: data.companyName ?? null, requestedDates: limit, returnedDates: history.length,
         detail, status: history.length ? "available" : "not_stored", history,
         omittedDatesForResponseBudget: 0,
         methodNote: RISK_METHOD_NOTE,
@@ -70,8 +86,9 @@ export function registerGetCompanyRiskHistory(server: McpServer): void {
       }
       const result = toolResult(payload);
       return history.length ? result : { ...result, isError: true };
-    } catch {
-      return { isError: true, content: [{ type: "text", text: "Company risk history could not be loaded. Check the exact ticker and retry; retained history may be unavailable." }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text", text: errorText(err, "Company risk history",
+        "Company risk history could not be loaded. Check the exact ticker and retry; retained history may be unavailable.") }] };
     }
   });
 }

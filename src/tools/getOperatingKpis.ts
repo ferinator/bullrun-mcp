@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { findExactStock, identityPayload } from "./stockIdentity.js";
+import { errorText, identityPayload, resolveStockTicker, TICKER_CONVENTION, tickerNotFoundText } from "./stockIdentity.js";
 
 interface OperatingKpi {
   ticker: string;
@@ -39,7 +39,7 @@ function latestByMetric(rows: OperatingKpi[]): OperatingKpi[] {
 
 const inputSchema = {
   ticker: z.string().min(1)
-    .describe("The ticker exactly as listed on Bullrun, e.g. \"CRWD\", \"SNOW\", \"V\"."),
+    .describe("Bullrun ticker, e.g. \"CRWD\", \"SNOW\", \"V\". " + TICKER_CONVENTION),
   metricKey: z.string().optional()
     .describe("Optional metric key present in stored coverage. No particular business KPI is guaranteed to be available."),
   category: z.string().optional()
@@ -61,22 +61,23 @@ export function registerGetOperatingKpis(server: McpServer): void {
     async (args) => {
       try {
         requirePublicScope("read:market");
-        const ticker = args.ticker.trim().toUpperCase();
-        if (!ticker) return { isError: true, content: [{ type: "text", text: "ticker is required" }] };
+        if (!args.ticker.trim()) return { isError: true, content: [{ type: "text", text: "ticker is required" }] };
+        const resolution = await resolveStockTicker(args.ticker);
+        if (!resolution.ticker) return { content: [{ type: "text", text: tickerNotFoundText(args.ticker, resolution) }] };
+        const ticker = resolution.ticker.toUpperCase();
+        const identity = resolution.stock;
 
         const enc = encodeURIComponent(ticker);
-        const [identity, rows] = await Promise.all([
-          findExactStock(ticker),
-          bullrunGet<OperatingKpi[]>(`/api/company-intelligence/${enc}/operating-kpis`, {
-            metricKey: args.metricKey,
-            category: args.category,
-            limit: args.limit,
-          }),
-        ]);
+        const rows = await bullrunGet<OperatingKpi[]>(`/api/company-intelligence/${enc}/operating-kpis`, {
+          metricKey: args.metricKey,
+          category: args.category,
+          limit: args.limit,
+        });
 
         const kpis = rows ?? [];
         const payload = {
           ticker,
+          ...(resolution.note ? { tickerResolution: resolution.note } : {}),
           identity: identityPayload(identity),
           coverage: {
             rows: kpis.length,
@@ -92,8 +93,9 @@ export function registerGetOperatingKpis(server: McpServer): void {
         };
 
         return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
-      } catch {
-        return { isError: true, content: [{ type: "text", text: "Operating KPIs could not be loaded. Check the exact Bullrun ticker and market-data access, then retry later; unavailable data is not an empty dataset." }] };
+      } catch (err) {
+        return { isError: true, content: [{ type: "text", text: errorText(err, "Operating KPIs",
+          "Operating KPIs could not be loaded. Check the exact Bullrun ticker and market-data access, then retry later; unavailable data is not an empty dataset.") }] };
       }
     },
   );

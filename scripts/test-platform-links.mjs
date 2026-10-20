@@ -76,6 +76,8 @@ test("discovery links preserve preset rules and avoid choosing ambiguous stock l
   assert.deepEqual(JSON.parse(preset.searchParams.get("filter")).rules, query.rules);
   assert.equal(preset.searchParams.get("sortBy"), "peRatio");
   assert.equal(continuationFor("screen_stock_presets", {}, { action: "list", presets: [] }), null);
+  assert.equal(continuationFor("screen_stocks", { action: "list_presets" }, { action: "list_presets", presets: [] }), null);
+  assert.equal(destination("screen_stocks", { preset: "profitable_value" }, { action: "run", query }).url.searchParams.get("sortBy"), "peRatio");
   for (const [name, field] of [["get_stock_price_history", "bars"], ["get_company_news", "articles"], ["find_stock_peers", "peers"]]) {
     assert.equal(continuationFor(name, { ticker: "AAPL" }, { [field]: [] }), null);
     const { link, url } = destination(name, { ticker: "AAPL", since: "2026-01-01" }, { [field]: [{}] });
@@ -140,7 +142,8 @@ test("ETF funds, index groups and comparisons use real app routes and disclose U
   const screen = destination("screen_etfs", { category: "Equity" }, {});
   assert.equal(screen.url.pathname, "/screener");
   assert.equal(screen.url.searchParams.get("universe"), "etfs");
-  assert.match(screen.link.description, /without applying.*filters/);
+  assert.match(screen.link.description, /same fund filters/);
+  assert.equal(JSON.parse(screen.url.searchParams.get("etfScreen")).filters.category, "Equity");
   assert.equal(destination("get_etf_exposures", {}, { ticker: "SPY", coverage: { storedHoldingRows: 0 }, exposures: { asset: [{ name: "Equity" }] } }).url.pathname, "/etfs/SPY");
   assert.equal(destination("simulate_etf_cost", {}, { ticker: "SPY", assumptions: { currency: "USD", storedExpenseRatioPct: null } }).url.pathname, "/etfs/SPY");
   assert.match(destination("screen_valuation_model", { model: "valuation_ps" }, {}).link.description, /does not apply the MCP screen/);
@@ -156,6 +159,59 @@ test("stock comparison links use covered stock identities and disclose the four-
   assert.equal(continuationFor("compare_stocks", {}, { coverage: [{ ticker: "UNKNOWN", identityAvailable: false }] }), null);
   const single = continuationFor("compare_stocks", {}, { coverage: coverage.slice(0, 1) });
   assert.equal(new URL(single.url).pathname, "/stocks/AAPL");
+});
+
+test("ETF screen handoffs preserve exact filter, rule and venue scope without leaking unrelated arguments", () => {
+  const query = { domicile: "Ireland", currency: "EUR", exchange: "XETRA", ucitsStatus: "UCITS", distributionPolicy: "ACCUMULATING",
+    holdingSearch: "NVIDIA", holdingMode: "EXCLUDES", holdingMinWeightPct: 2.5, currencyHedged: "NOT_LABELLED_HEDGED", includeSecondary: false,
+    rules: [{ metric: "expenseRatioPct", operator: "..", value: "0.05", valueMax: "0.3", unit: "", groupId: 1 }, { metric: "totalAssets", operator: ">=", value: "5", unit: "B", groupId: 2 }],
+    sortBy: "expenseRatioPct", order: "asc" };
+  const { url, link } = destination("screen_etfs", { privateNotes: "secret", token: "secret" }, { query });
+  const state = JSON.parse(url.searchParams.get("etfScreen"));
+  assert.equal(state.version, 1);
+  assert.deepEqual(state.filters, Object.fromEntries(Object.entries(query).filter(([key]) => !["rules", "sortBy", "order"].includes(key))));
+  assert.deepEqual(state.rules.map(rule => [rule.metric, rule.groupId, rule.unit, rule.valueMax]), [["expenseRatioPct", 1, "", "0.3"], ["totalAssets", 2, "B", ""]]);
+  assert.equal(state.sortBy, "expenseRatioPct");
+  assert.equal(state.order, "asc");
+  assert.match(link.description, /one fund per ISIN/);
+  assert.equal(url.toString().includes("secret"), false);
+  const listings = destination("screen_etfs", {}, { query: { ...query, includeSecondary: true } });
+  assert.equal(JSON.parse(listings.url.searchParams.get("etfScreen")).filters.includeSecondary, true);
+  assert.match(listings.link.description, /separate listing/);
+  const tooLarge = destination("screen_etfs", {}, { query: { ...query, rules: Array(61).fill(query.rules[0]) } });
+  assert.equal(tooLarge.url.searchParams.has("etfScreen"), false);
+  assert.match(tooLarge.link.description, /without.*filters or sort/);
+});
+
+test("saved shortlist links contain no ticker basket or account identity", () => {
+  const { url } = destination("save_research_shortlist", { tickers: ["AAPL"], userId: 42 }, { saved: true, savedCount: 1, items: [{ ticker: "AAPL" }] });
+  assert.equal(url.pathname, "/short-list");
+  assert.equal(url.searchParams.has("tickers"), false);
+  assert.equal(url.searchParams.has("userId"), false);
+  assert.equal(continuationFor("save_research_shortlist", {}, { saved: false, savedCount: 0 }), null);
+});
+
+test("labels name the action waiting on the page instead of a generic visit", () => {
+  const label = (tool, args, payload) => destination(tool, args, payload).link.label;
+  assert.equal(label("screen_stocks", {}, { action: "run", query: { rules: [] } }), "Open and save this stock screen");
+  assert.match(destination("screen_stocks", {}, { action: "run", query: { rules: [] } }).link.description, /save it to a free account/);
+  assert.equal(label("get_company_relationships", { ticker: "AAPL" }, { subject: { nodeId: "1" } }), "Explore AAPL's interactive company network");
+  assert.equal(label("compare_company_exposures", {}, { companies: [{ ticker: "AAPL", subject: { nodeId: "1" } }] }), "Explore AAPL's interactive company network");
+  for (const name of ["create_portfolio_draft", "create_position_draft", "create_portfolio_from_positions"]) {
+    assert.equal(label(name, {}, { saved: true, draftId: 7 }), "Review and track this paper portfolio");
+  }
+  assert.equal(label("get_company_risk", { ticker: "AAPL" }, { modules: { dials: {} } }), "Explore AAPL's risk dials and evidence");
+  assert.match(destination("get_stock_metrics", { ticker: "AAPL" }, { identity: { ticker: "AAPL" } }).link.description, /Research Shortlist/);
+  assert.equal(label("list_research_shortlist", {}, { count: 0, items: [] }), "Open your saved Research Shortlist");
+  assert.equal(label("get_corporate_calendar", {}, { calendars: [{ type: "listings", events: [{}] }] }), "Browse the full new-listings calendar");
+  // The ETF screener cannot save a screen, so its link must not promise one.
+  assert.doesNotMatch(label("screen_etfs", { category: "Equity" }, {}), /save/i);
+  for (const tool of ["get_stock_metrics", "screen_stocks", "get_etf_snapshot", "list_portfolios", "compare_stocks"]) {
+    const link = continuationFor(tool, { ticker: "AAPL", portfolioId: 1 }, { identity: { ticker: "AAPL" }, found: true, action: "run", query: {},
+      coverage: [{ ticker: "AAPL", identityAvailable: true }, { ticker: "MSFT", identityAvailable: true }] });
+    assert.ok(link, tool);
+    assert.doesNotMatch(link.label, /\bin Bullrun\b|^Visit\b|research$/, `${tool}: "${link.label}" is generic`);
+  }
 });
 
 test("unavailable entities and errors do not gain misleading links", () => {
@@ -184,7 +240,7 @@ test("SDK accepts text, structuredContent and resource_link while coverage banne
   await client.connect(clientTransport);
   try {
     const definitions = await client.listTools();
-    assert.match(definitions.tools[0].description, /platformLink/);
+    assert.equal(definitions.tools[0].description, "A fixture snapshot.");
     assert.ok(definitions.tools[0].outputSchema.properties.platformLink);
     const result = await client.callTool({ name: "get_stock_metrics", arguments: { ticker: "AAPL" } });
     assert.equal(result.isError, undefined);
@@ -194,7 +250,7 @@ test("SDK accepts text, structuredContent and resource_link while coverage banne
     assert.deepEqual(payload, result.structuredContent);
     assert.deepEqual(payload.warnings, ["Partial coverage"]);
     assert.equal(payload.webPage, payload.platformLink.url);
-    assert.match(result.content[2].text, /^\[Explore AAPL's company research\]\(https:\/\/bull-run.org\/stocks\/AAPL\?/);
+    assert.match(result.content[2].text, /^\[Explore AAPL's charts and financials\]\(https:\/\/bull-run.org\/stocks\/AAPL\?/);
     assert.equal(result.content[3].type, "resource_link");
     assert.equal(result.content[3].uri, payload.platformLink.url);
   } finally {

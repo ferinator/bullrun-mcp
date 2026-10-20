@@ -4,6 +4,7 @@ import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
 import { toolResult } from "./etfData.js";
 import { cleanText, discoveryIdentity, discoveryRows, finiteNumber, sameIssuer, sameText, type DiscoveryStock } from "./stockDiscoveryData.js";
+import { errorText, resolveStockTicker, TICKER_CONVENTION, tickerNotFoundText } from "./stockIdentity.js";
 
 const CANDIDATE_CAP = 500;
 
@@ -13,7 +14,7 @@ export function registerFindStockPeers(server: McpServer): void {
     annotations: { readOnlyHint: true },
     description: "Discover stock comparison candidates for one exact Bullrun ticker using stored industry or sector classification. Discloses the chosen classification, country preference, deterministic selection order, scan cap and issuer/listing exclusions. Excludes the subject, secondary listings and identifiable duplicate issuers/share classes. Returns compact stored multiples/growth plus ready-to-use compare_stocks arguments. Classification peers are not verified competitors or a financial-similarity ranking; no generated peers or paid graph discovery. Read-only.",
     inputSchema: {
-      ticker: z.string().trim().min(1).max(80).describe("Exact native Bullrun equity ticker. Use search_stocks first for a company name, ISIN or Yahoo-format symbol."),
+      ticker: z.string().trim().min(1).max(80).describe("Bullrun equity ticker, e.g. AAPL, BMW or 6324.T. " + TICKER_CONVENTION),
       matchBy: z.enum(["auto", "industry", "sector"]).default("auto").describe("auto uses exact stored industry when present, otherwise sector. It does not silently widen an empty industry result to the entire sector."),
       sameCountryOnly: z.boolean().default(false).describe("Restrict to the subject's exact stored country. Otherwise same-country candidates are shown first, followed by other countries."),
       limit: z.number().int().min(1).max(10).default(4).describe("Maximum peers. compare_stocks supports the subject plus at most four selected peers."),
@@ -22,10 +23,15 @@ export function registerFindStockPeers(server: McpServer): void {
     try { requirePublicScope("read:market"); }
     catch { return { isError: true, content: [{ type: "text" as const, text: 'find_stock_peers requires the "read:market" scope.' }] }; }
     try {
-      const ticker = args.ticker.trim().toUpperCase();
-      const subject = await bullrunGet<DiscoveryStock>(`/api/stocks/${encodeURIComponent(ticker)}`, undefined, 6_000);
-      if (!subject || !sameText(subject.ticker, ticker) || subject.quoteType != null && !sameText(subject.quoteType, "EQUITY")) {
-        return { isError: true, content: [{ type: "text" as const, text: "No exact equity identity matched this ticker. Resolve the intended native stock listing with search_stocks first." }] };
+      const resolution = await resolveStockTicker(args.ticker);
+      if (!resolution.ticker || !resolution.stock) {
+        return { isError: true, content: [{ type: "text" as const, text: tickerNotFoundText(args.ticker, resolution) }] };
+      }
+      const ticker = resolution.ticker.toUpperCase();
+      // GET /api/stocks/{ticker} returns the whole listing row, search summary fields included.
+      const subject = resolution.stock as DiscoveryStock;
+      if (subject.quoteType != null && !sameText(subject.quoteType, "EQUITY")) {
+        return { isError: true, content: [{ type: "text" as const, text: `${ticker} is listed as ${cleanText(subject.quoteType, 30)}, not a stock; peers are found for equities only.` }] };
       }
       const classification = args.matchBy === "auto" ? cleanText(subject.industry) ? "industry" : "sector" : args.matchBy;
       const classificationValue = cleanText(subject[classification], 140);
@@ -55,7 +61,8 @@ export function registerFindStockPeers(server: McpServer): void {
       }
       const peers = unique.slice(0, args.limit);
       return toolResult({
-        ticker, subject: discoveryIdentity(subject), retrievedAt: new Date().toISOString(),
+        ticker, ...(resolution.note ? { tickerResolution: resolution.note } : {}),
+        subject: discoveryIdentity(subject), retrievedAt: new Date().toISOString(),
         selection: { matchByRequested: args.matchBy, effectiveMatchBy: classification, classificationValue,
           sameCountryOnly: args.sameCountryOnly, primaryListingsOnly: true, includeInactive: false,
           order: "Subject country first, then company name, then ticker; not ranked by investment merit or financial similarity.",
@@ -79,8 +86,9 @@ export function registerFindStockPeers(server: McpServer): void {
           ...(subject.quoteType == null ? ["The subject's quote type is unclassified; the backend treats it as equity, but this is not a confirmed instrument classification."] : []),
         ],
       });
-    } catch {
-      return { isError: true, content: [{ type: "text" as const, text: "Stock peers could not be loaded. Check the exact ticker and retry. No graph enrichment or paid discovery was started." }] };
+    } catch (err) {
+      return { isError: true, content: [{ type: "text" as const, text: errorText(err, "Stock peers",
+        "Stock peers could not be loaded. Check the exact ticker and retry. No graph enrichment or paid discovery was started.") }] };
     }
   });
 }

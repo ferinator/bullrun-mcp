@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { safe } from "./stockIdentity.js";
+import { failureText, settle } from "./stockIdentity.js";
 import { findExactEtf, fractionToPct, toolResult, type EtfProfile } from "./etfData.js";
 
 const inputSchema = {
@@ -47,14 +47,16 @@ export function registerSimulateEtfCost(server: McpServer): void {
       try {
         requirePublicScope("read:market");
         const ticker = args.ticker.trim().toUpperCase();
-        const [identity, profile] = await Promise.all([
+        const [identity, profileRead] = await Promise.all([
           findExactEtf(ticker),
-          safe(bullrunGet<EtfProfile>(`/api/etfs/${encodeURIComponent(ticker)}/profile`)),
+          settle(bullrunGet<EtfProfile>(`/api/etfs/${encodeURIComponent(ticker)}/profile`)),
         ]);
-        const storedExpenseRatioPct = fractionToPct(profile?.expenseRatio);
+        const storedExpenseRatioPct = fractionToPct(profileRead.data?.expenseRatio);
         const expenseRatioPctUsed = args.expenseRatioPct ?? storedExpenseRatioPct;
         if (expenseRatioPctUsed == null) {
-          throw new Error(`No expense ratio is stored for ${ticker}; provide expenseRatioPct explicitly to simulate costs.`);
+          throw new Error(profileRead.failure
+            ? `${failureText(`The stored expense ratio for ${ticker}`, profileRead.failure)} Or provide expenseRatioPct explicitly.`
+            : `No expense ratio is stored for ${ticker}; provide expenseRatioPct explicitly to simulate costs.`);
         }
 
         const months = Math.max(1, Math.round(args.years * 12));

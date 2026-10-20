@@ -1,10 +1,29 @@
 {
   "$schema": "https://glama.ai/mcp/schemas/server.json",
-  "maintainers": ["ferinator"],
+  "maintainers": [
+    "ferinator"
+  ],
   "name": "Bullrun",
-  "description": "Global stock and UCITS ETF research without an API key: company search, transparent screens, price history and technicals, company news, financial statements, risk and relationships, macro and portfolio analysis. Dataset coverage and freshness are explicit; personal portfolios require sign-in.",
+  "description": "Research global stocks with ML valuation context, compare UCITS ETF costs and overlap, and inspect company dependencies. Public research needs no account or API key. Connect a free Bullrun account to save research and review portfolios. Coverage and dates are explicit.",
   "type": "mcp_server",
   "status": "beta",
-  "transport": ["streamable-http", "stdio"],
-  "keywords": ["finance", "stocks", "screening", "price-history", "technicals", "news", "etf", "ucits", "isin", "portfolio", "risk", "macro", "valuation"]
+  "transport": [
+    "streamable-http",
+    "stdio"
+  ],
+  "keywords": [
+    "finance",
+    "stocks",
+    "screening",
+    "price-history",
+    "technicals",
+    "news",
+    "etf",
+    "ucits",
+    "isin",
+    "portfolio",
+    "risk",
+    "macro",
+    "valuation"
+  ]
 }

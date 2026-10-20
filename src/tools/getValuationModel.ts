@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { resolveStockTicker, safe, TICKER_CONVENTION, tickerNotFoundText } from "./stockIdentity.js";
+import { failureText, resolveStockTicker, settle, TICKER_CONVENTION, tickerNotFoundText } from "./stockIdentity.js";
 import { mapWithConcurrency, toolResult } from "./etfData.js";
 import {
   FORECAST_CAVEAT,
@@ -51,11 +51,22 @@ export function registerGetValuationModel(server: McpServer): void {
         });
         const tickers = [...new Set(resolutions.map((r) => r.ticker).filter((t): t is string => t != null))];
         const summaries = await mapWithConcurrency(tickers, 4, (ticker) =>
-          safe(bullrunGet<{ results: Partial<Record<string, MlScore>> }>("/api/ml-scores/summary", { ticker, includePs: true })),
+          settle(bullrunGet<{ results: Partial<Record<string, MlScore>> }>("/api/ml-scores/summary", { ticker, includePs: true })),
         );
+        const failures = summaries.map((summary) => summary.failure);
+        if (tickers.length && failures.every((failure) => failure)) {
+          const failure = failures.includes("quota") ? "quota" : "unavailable";
+          return { isError: true, content: [{ type: "text", text: `get_valuation_model: ${failureText("Model scores", failure)}` }] };
+        }
 
         const results: Array<Record<string, unknown>> = tickers.map((ticker, i) => {
-          const scores = summaries[i]?.results ?? {};
+          const failure = failures[i];
+          if (failure) {
+            // A failed read says nothing about whether the models score this company.
+            warnings.push(`${ticker}: ${failureText("Model scores", failure)}`);
+            return { ticker, scored: null, loaded: false };
+          }
+          const scores = summaries[i].data?.results ?? {};
           const keys = MODEL_KEYS.filter((k) => scores[k]);
           if (!keys.length) {
             warnings.push(`${ticker}: no model score. The models skip companies with too little reported history, a sub-p10 market cap for their currency, a 50%+ one-year collapse, or (P/E model) an out-of-band trailing P/E. Check the exact ticker with get_stock_metrics.`);

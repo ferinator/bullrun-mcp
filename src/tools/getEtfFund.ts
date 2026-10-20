@@ -2,10 +2,10 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { safe, tidy, type Stock } from "./stockIdentity.js";
+import { safe, settle, tidy, UpstreamReadError, type Stock } from "./stockIdentity.js";
 import {
-  findExactEtf,
   fractionToPct,
+  readExactEtf,
   toolResult,
   type EtfProfile,
 } from "./etfData.js";
@@ -131,11 +131,15 @@ export function registerGetEtfFund(server: McpServer): void {
         if (!isin) {
           resolvedVia = "ticker";
           const enc = encodeURIComponent(rawTicker);
-          const [profile, listing] = await Promise.all([
-            safe(bullrunGet<EtfProfile>(`/api/etfs/${enc}/profile`)),
-            findExactEtf(rawTicker),
+          const [profileRead, listingRead] = await Promise.all([
+            settle(bullrunGet<EtfProfile>(`/api/etfs/${enc}/profile`)),
+            readExactEtf(rawTicker),
           ]);
-          isin = (profile?.fundIsin ?? listing?.isin ?? "").trim().toUpperCase();
+          const listing = listingRead.data;
+          isin = (profileRead.data?.fundIsin ?? listing?.isin ?? "").trim().toUpperCase();
+          // A failed lookup is not "no ETF listing matches".
+          const failure = profileRead.failure ?? listingRead.failure;
+          if (!isin && failure) throw new UpstreamReadError(failure, `The fund lookup for ${rawTicker}`);
           if (!isin) {
             const siblings = await symbolSiblings(rawTicker, null);
             return toolResult({

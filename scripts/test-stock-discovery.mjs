@@ -77,9 +77,10 @@ before(async () => {
   await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
   process.env.BULLRUN_API_BASE = `http://127.0.0.1:${upstream.address().port}`;
   const search = await import("../dist/tools/searchStocks.js");
+  const screens = await import("../dist/tools/screenStocks.js");
   const presets = await import("../dist/tools/screenStockPresets.js");
   const peers = await import("../dist/tools/findStockPeers.js");
-  registrations = [search.registerSearchStocks, presets.registerScreenStockPresets, peers.registerFindStockPeers];
+  registrations = [search.registerSearchStocks, screens.registerScreenStocks, presets.registerScreenStockPresets, peers.registerFindStockPeers];
   ({ runWithAuth } = await import("../dist/auth/context.js"));
   for (const register of registrations) register({ registerTool(name, _definition, callback) { callbacks.set(name, callback); } });
 });
@@ -113,7 +114,7 @@ test("search exposes read-only SDK metadata and resolves native/MIC-qualified ti
   reset();
   await withClient(async client => {
     const defs = await client.listTools();
-    assert.equal(defs.tools.length, 3);
+    assert.equal(defs.tools.length, 4);
     for (const definition of defs.tools) assert.equal(definition.annotations.readOnlyHint, true);
     const result = await call(client, "search_stocks", { query: "XNAS:AAPL", exchange: "NASDAQ" });
     assert.equal(result.isError, undefined);
@@ -228,6 +229,110 @@ test("running presets executes one existing screener call with exact AND rules a
   });
 });
 
+test("screen_stocks lists every preset without reads and executes exactly the disclosed rules and sorting", async () => {
+  reset();
+  await withClient(async client => {
+    const listed = (await call(client, "screen_stocks", { action: "list_presets" })).structuredContent;
+    assert.equal(listed.action, "list_presets");
+    assert.equal(requests.length, 0);
+    const legacy = (await call(client, "screen_stock_presets", {})).structuredContent;
+    assert.deepEqual(listed.presets, legacy.presets);
+    assert.deepEqual(listed.methodology, legacy.methodology);
+    assert.equal(requests.length, 0);
+
+    for (const preset of listed.presets) {
+      reset();
+      const result = await call(client, "screen_stocks", { preset: preset.key });
+      assert.equal(result.isError, undefined, preset.key);
+      const data = result.structuredContent;
+      assert.equal(requests.length, 1);
+      assert.equal(requests[0].method, "POST");
+      assert.equal(requests[0].url.pathname, "/api/screener/filter");
+      assert.equal(requests[0].url.searchParams.get("sortBy"), preset.sortBy);
+      assert.equal(requests[0].url.searchParams.get("order"), preset.order);
+      assert.equal(requests[0].url.searchParams.get("limit"), "20");
+      assert.equal(requests[0].url.searchParams.get("includeInactive"), "false");
+      assert.equal(requests[0].body.lookbackMode, "annual");
+      assert.equal(requests[0].body.lookback, 3);
+      assert.equal(requests[0].body.includeSecondary, false);
+      assert.deepEqual(requests[0].body.rules.map(({ id, ...rule }) => rule), preset.rules);
+      assert.equal(data.preset.key, preset.key);
+      assert.deepEqual(data.query.rules, requests[0].body.rules);
+      assert.equal(data.coverage.completeUniverse, false);
+      assert.equal(data.coverage.totalMatches, null);
+      assert.equal(data.results[0].reportingCurrency, null);
+      assert.deepEqual(data.results[0].growthObservationsNewestFirst.revenuePct, [null, null]);
+      assert.ok(data.warnings.some(warning => /fiscal periods, source timestamps and reporting currencies/.test(warning)));
+    }
+  });
+});
+
+test("screen_stocks validates incompatible preset controls before any metered request", async () => {
+  reset();
+  await withClient(async client => {
+    for (const controls of [
+      { rules: [] },
+      { rules: [{ metric: "peRatio", value: 5 }] },
+      { minMarketCap: 0 },
+      { lookbackMode: "quarterly" },
+      { mode: "quarterly" },
+      { includeSecondary: true },
+      { includeInactive: true },
+      { sortBy: "marketCap" },
+      { order: "desc" },
+      { lookback: 1 },
+      { periods: 11 },
+      { limit: 51 },
+    ]) {
+      const result = await call(client, "screen_stocks", { preset: "profitable_value", ...controls });
+      assert.equal(result.isError, true, JSON.stringify(controls));
+      assert.equal(requests.length, 0, JSON.stringify(controls));
+    }
+    const unknown = await call(client, "screen_stocks", { preset: "unknown" });
+    assert.equal(unknown.isError, true);
+    assert.equal(requests.length, 0);
+    const result = await call(client, "screen_stocks", { action: "run", preset: "profitable_value",
+      country: "Germany", lookback: 5, limit: 1, sortBy: "peRatio", order: "asc" });
+    assert.equal(result.isError, undefined);
+    assert.equal(requests.length, 1);
+    assert.deepEqual(requests[0].body.countries, ["Germany"]);
+    assert.equal(requests[0].body.lookback, 5);
+    assert.equal(result.structuredContent.coverage.resultLimitReached, true);
+  });
+});
+
+test("custom screen defaults and rule-group controls remain available alongside presets", async () => {
+  reset();
+  await withClient(async client => {
+    const defaultResult = await call(client, "screen_stocks", {});
+    assert.equal(defaultResult.isError, undefined);
+    assert.equal(requests.length, 1);
+    assert.deepEqual(requests[0].body.rules, []);
+    assert.equal(requests[0].body.lookbackMode, "annual");
+    assert.equal(requests[0].body.lookback, 3);
+    assert.equal(requests[0].body.includeSecondary, false);
+    assert.equal(requests[0].url.searchParams.get("sortBy"), "marketCap");
+    assert.equal(requests[0].url.searchParams.get("order"), "desc");
+    assert.equal(requests[0].url.searchParams.get("limit"), "25");
+    reset();
+    const custom = await call(client, "screen_stocks", { action: "run", mode: "quarterly", periods: 8,
+      rules: [{ metric: "peRatio", operator: "<=", value: 15, groupId: 1 },
+        { metric: "dividendYield", operator: ">=", value: 3, groupId: 2 }],
+      minMarketCap: 1_000_000_000, includeSecondary: true, includeInactive: true,
+      sortBy: "revenueGrowth", limit: 100 });
+    assert.equal(custom.isError, undefined);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].body.lookbackMode, "quarterly");
+    assert.equal(requests[0].body.lookback, 8);
+    assert.equal(requests[0].body.rules.length, 4);
+    assert.equal(requests[0].body.includeSecondary, true);
+    assert.equal(requests[0].url.searchParams.get("includeInactive"), "true");
+    assert.equal(requests[0].url.searchParams.get("sortBy"), "revenueGrowthPct");
+    assert.equal(requests[0].url.searchParams.get("limit"), "100");
+    assert.equal(JSON.parse(custom.content[0].text).returned, 1);
+  });
+});
+
 test("peer discovery excludes same issuers, share classes, secondaries and wrong classification", async () => {
   reset();
   await withClient(async client => {
@@ -265,18 +370,23 @@ test("peer country filters, classification fallback and empty results are explic
   });
 });
 
-test("wrong identities, non-equities, scope errors and upstream failures fail closed without sensitive errors", async () => {
+test("non-equities, scope errors and upstream failures fail closed without sensitive errors; a renamed ticker is followed openly", async () => {
   await withClient(async client => {
-    for (const nextMode of ["wrong-identity", "fund-subject"]) {
-      reset(nextMode);
-      const result = await call(client, "find_stock_peers", { ticker: "ACME" });
-      assert.equal(result.isError, true);
-      assert.equal(requests.length, 1);
-    }
+    reset("fund-subject");
+    const fund = await call(client, "find_stock_peers", { ticker: "ACME" });
+    assert.equal(fund.isError, true);
+    assert.equal(requests.length, 1);
+    // GET /api/stocks/{ticker} answers a retired ticker with its survivor's row, so a
+    // different ticker coming back is followed as a rename, and the response says so.
+    reset("wrong-identity");
+    const renamed = await call(client, "find_stock_peers", { ticker: "ACME" });
+    assert.equal(renamed.isError, undefined);
+    assert.equal(renamed.structuredContent.ticker, "WRONG");
+    assert.match(renamed.structuredContent.tickerResolution, /ACME is a retired ticker; its listing is now WRONG/);
     reset("bad-screen");
     assert.equal((await call(client, "screen_stock_presets", { action: "run", preset: "profitable_value" })).isError, true);
     reset("failure");
-    for (const [name, args] of [["search_stocks", { query: "AAPL" }], ["screen_stock_presets", { action: "run", preset: "dividend_income" }], ["find_stock_peers", { ticker: "ACME" }]]) {
+    for (const [name, args] of [["search_stocks", { query: "AAPL" }], ["screen_stocks", { preset: "dividend_income" }], ["screen_stock_presets", { action: "run", preset: "dividend_income" }], ["find_stock_peers", { ticker: "ACME" }]]) {
       const result = await call(client, name, args);
       assert.equal(result.isError, true);
       assert.doesNotMatch(JSON.stringify(result), /upstream-secret|private\.internal|127\.0\.0\.1/);

@@ -465,21 +465,21 @@ ok(
   raBanner.slice(0, 120),
 );
 
-const fitResult = await callTool(await mint(42), "analyze_portfolio_fit", {
+const fitResult = await callTool(await mint(42), "get_portfolio_analytics", {
   portfolioId: 1,
   candidateTicker: "SPY",
   candidateWeightPct: 5,
+  includeLookThrough: true,
 });
-const fit = fitResult.structuredContent ?? JSON.parse(fitResult.content?.[0]?.text ?? "{}");
+const fit = fitResult.structuredContent ?? JSON.parse(fitResult.content?.[1]?.text ?? "{}");
 ok(
   !fitResult.isError &&
-    fit.candidateTicker === "SPY" &&
-    fit.priceRiskFit?.ticker === "SPY" &&
-    fit.priceRiskFit?.volatilityDeltaPctPoints === -0.6 &&
+    fit.candidateFit?.ticker === "SPY" &&
+    fit.candidateFit?.volatilityDeltaPctPoints === -0.6 &&
     fit.lookThroughFit?.duplicateUnderlyingCount === 0 &&
-    fit.coverage?.candidateHoldingsComplete === false &&
-    fit.warnings?.some((warning) => warning.includes("lower bound")),
-  "analyze_portfolio_fit -> price-risk fit + partial candidate look-through",
+    fit.lookThroughCoverage?.candidateHoldingsComplete === false &&
+    fit.lookThroughWarnings?.some((warning) => warning.includes("lower bound")),
+  "get_portfolio_analytics(look-through) -> price-risk fit + partial candidate look-through",
   JSON.stringify(fit).slice(0, 320),
 );
 
@@ -534,7 +534,7 @@ const { promptNames, buildText } = await withPromptClient(await mint(42), async 
   };
 });
 ok(
-  promptNames === "analyze_portfolio,build_portfolio,market_briefing,stock_deep_dive,suggest_positions",
+  promptNames === "analyze_portfolio,build_portfolio,compare_ucits_costs,find_ml_candidates,market_briefing,research_shortlist_briefing,stock_deep_dive,suggest_positions",
   "prompts/list -> portfolio, stock and market entry points",
   promptNames,
 );

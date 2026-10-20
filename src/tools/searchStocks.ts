@@ -4,9 +4,44 @@ import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
 import { toolResult } from "./etfData.js";
 import { discoveryIdentity, discoveryRows, exchangeMatches, sameText, suffixRootMatches, validIsin, yahooAlternative, type DiscoveryStock } from "./stockDiscoveryData.js";
+import { listingCountry, normalizeCountry } from "./holdingIdentity.js";
 
 const SCAN_LIMIT = 500;
 const TIMEOUT_MS = 6_000;
+
+/**
+ * Whether a listing trades on its issuer's home market: the venue's country (from the
+ * stored exchange, else the ticker suffix) is the company's stored country, else its
+ * ISIN's. Hong Kong counts as home for mainland Chinese issuers, whose H shares list there.
+ */
+function onHomeVenue(row: DiscoveryStock): boolean {
+  const venue = listingCountry(row) ?? listingCountry({ ticker: row.ticker, exchange: null });
+  const home = normalizeCountry(row.country) ?? normalizeCountry(row.isin?.slice(0, 2));
+  return venue != null && home != null && (venue === home || home === "CN" && venue === "HK");
+}
+
+/**
+ * Among candidates that share an ISIN, the home-venue listing takes the group's best
+ * place: Harmonic Drive's 6324.T before Frankfurt's K3R, although K3R's provider label
+ * "HARMONIC DRIVE" is the exact name. Within each part the given order holds, and rows
+ * with no home-venue sibling keep their positions.
+ */
+function homeVenueFirst(rows: DiscoveryStock[]): DiscoveryStock[] {
+  const groups = new Map<string, number[]>();
+  rows.forEach((row, index) => {
+    const isin = row.isin?.trim().toUpperCase();
+    if (isin) groups.set(isin, [...(groups.get(isin) ?? []), index]);
+  });
+  const out = rows.slice();
+  for (const positions of groups.values()) {
+    const members = positions.map(index => rows[index]);
+    const home = members.filter(onHomeVenue);
+    if (!home.length || home.length === members.length) continue;
+    const ordered = [...home, ...members.filter(row => !home.includes(row))];
+    positions.forEach((position, index) => { out[position] = ordered[index]; });
+  }
+  return out;
+}
 
 export function registerSearchStocks(server: McpServer): void {
   server.registerTool("search_stocks", {
@@ -68,11 +103,14 @@ export function registerSearchStocks(server: McpServer): void {
       const unique = [...new Map(rows.map(row => [row.ticker.toUpperCase(), row])).values()];
       const isinMatches = (row: DiscoveryStock) => sameText(row.isin, upper) || sameText(row.fundIsin, upper);
       const exact = unique.filter(row => isin ? isinMatches(row) : sameText(row.ticker, upper));
-      const exactName = unique.filter(row => sameText(row.company, query));
-      const candidates: DiscoveryStock[] = exact.length ? exact : usedSuffix ? unique : exactName.length ? exactName : unique;
+      // Provider company labels vary by venue ("HARMONIC DRIVE" versus
+      // "Harmonic Drive Systems Inc."). An exact name is a ranking hint, not
+      // evidence that other returned listings are unrelated or unavailable.
+      const candidates: DiscoveryStock[] = exact.length ? exact : unique;
       const truncatedScan = searches.some(entry => entry.mayBeTruncated);
-      const ranked = candidates.slice().sort((a, b) => Number(Boolean(a.primaryTicker)) - Number(Boolean(b.primaryTicker))
-        || a.ticker.localeCompare(b.ticker));
+      const ranked = homeVenueFirst(candidates.slice().sort((a, b) => Number(sameText(b.company, query)) - Number(sameText(a.company, query))
+        || Number(Boolean(a.primaryTicker)) - Number(Boolean(b.primaryTicker))
+        || a.ticker.localeCompare(b.ticker)));
       // A single fuzzy, name or suffix suggestion is still a suggestion. Only a
       // unique exact native ticker/ISIN can establish an unambiguous listing.
       const resolved = exact.length === 1 && !usedSuffix && (!isin || !truncatedScan)
@@ -89,6 +127,7 @@ export function registerSearchStocks(server: McpServer): void {
         coverage: { searches, mayBeTruncated: truncatedScan || ranked.length > args.limit, completeUniverse: false },
         methodology: { suffix: usedSuffix ? { input: upper, root: suffix?.root, compatibleVenues: suffix?.venues } : null,
           resolution: "Only one exact native ticker or one exact ISIN listing is resolved. Name and Yahoo-format alternatives require confirmation of the intended listing; multiple venues/share classes remain alternatives.",
+          ordering: "Exact company names first, then primary listings, then ticker. Among listings that share an ISIN, the one on the issuer's home market comes first (Hong Kong counts as home for mainland Chinese issuers); other rows keep their place.",
           classification: "Null quoteType is an unclassified equity in the backend, not proof of equity classification. Missing identifiers and lifecycle fields are unknown." },
         warnings: [
           ...(usedSuffix ? ["The Yahoo suffix was interpreted using compatible stored exchange codes. Verify the returned company, share class, exchange and currency before choosing a native ticker."] : []),

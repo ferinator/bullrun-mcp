@@ -44,12 +44,16 @@ const inputSchema = {
     .describe("Headlines to return when the news section is requested."),
 };
 
-/** Where a row's numbers come from and how fresh that source can be, from its history code. */
+/**
+ * Where a row's numbers come from and how fresh that source can be, from its history
+ * code. FX and oil/gas rows take whichever of the FRED series and its daily Yahoo twin
+ * has the newer observation (datacrawler-macro's catalog fallback_series).
+ */
 function seriesCadence(historyCode: string | null | undefined): string | null {
   if (!historyCode) return null;
   if (historyCode.startsWith("YAHOO_")) return "Yahoo, daily";
-  if (/^DEX|^DTWEX/.test(historyCode)) return "FRED H.10, weekly release (up to ~1 week old)";
-  if (/^DCOIL|^DHHNG/.test(historyCode)) return "FRED/EIA, daily with a few days' publication lag";
+  if (/^DEX/.test(historyCode)) return "FRED H.10 (weekly release) or Yahoo daily, whichever is newer";
+  if (/^DCOIL|^DHHNG/.test(historyCode)) return "FRED/EIA (a few days' lag) or Yahoo futures daily, whichever is newer";
   return null;
 }
 
@@ -153,8 +157,8 @@ export function registerGetGlobalMarketsOverview(server: McpServer): void {
         if ((sections.has("currencies") || sections.has("commodities") || sections.has("headline"))
             && [...((out.currencies as Array<{ source: string | null }> | undefined) ?? []),
               ...((out.commodities as Array<{ source: string | null }> | undefined) ?? [])]
-              .some((row) => row.source?.startsWith("FRED"))) {
-          warnings.push("Rows sourced from FRED (source field) are published with a lag: the major FX pairs and the dollar index come from the weekly H.10 release and can be a week old, oil and gas a few days. Yahoo-sourced rows are daily. Do not compare a FRED row's change with a same-day move elsewhere; get_macro_history with the historyCode shows the latest observation date.");
+              .some((row) => row.source?.endsWith("whichever is newer"))) {
+          warnings.push("Rows whose source says \"whichever is newer\" show the fresher of a FRED series and its daily Yahoo twin. For FX and natural gas the historyCode is the FRED series, so get_macro_history can end before the row's value (H.10 FX is a weekly release); oil history follows the fresher source. The DXY tile is ICE's dollar index from Yahoo, daily; the headline context field gives each tile's latest observation dates.");
         }
 
         if (sections.has("calendar")) {

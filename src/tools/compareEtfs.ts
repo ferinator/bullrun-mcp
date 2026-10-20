@@ -2,9 +2,11 @@ import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { safe } from "./stockIdentity.js";
+import { failureText, NOT_REQUESTED, safe, settle } from "./stockIdentity.js";
 import { anchoredWindow, calculatePriceRisk, pricesAscending, roundMetric } from "./etfAnalytics.js";
+import { calculateEtfOverlap } from "./etfOverlap.js";
 import {
+  etfClassification,
   findExactEtf,
   fractionToPct,
   toolResult,
@@ -14,16 +16,19 @@ import {
 } from "./etfData.js";
 
 const comparisonModule = z.enum([
-  "classification", "market", "fund_data", "costs", "income", "benchmark", "performance", "risk", "holdings",
+  "classification", "market", "fund_data", "costs", "income", "benchmark", "performance", "risk", "holdings", "overlap",
 ]);
 
 const inputSchema = {
   tickers: z.array(z.string().min(1)).min(2).max(10)
     .describe("Two to ten exact Bullrun ETF listing tickers."),
-  include: z.array(comparisonModule).min(1).max(9)
-    .default(["classification", "market", "fund_data", "costs", "income", "benchmark"]),
+  include: z.array(comparisonModule).min(1).max(10)
+    .default(["classification", "market", "fund_data", "costs", "income", "benchmark"])
+    .describe("Selected comparison modules. overlap is opt-in and returns pairwise shared holdings and weighted overlap from each fund's latest stored snapshot."),
   performanceDays: z.number().int().min(30).max(1825).default(365)
     .describe("Window in calendar days back from each fund's newest close; the start is the last close on or before that day. 365 matches the fund page and the screener's 1-year return."),
+  topSharedLimit: z.number().int().min(1).max(100).default(20)
+    .describe("Maximum shared holdings per ETF pair when overlap is requested; does not limit the snapshots used in overlap calculations."),
 };
 
 const outputSchema = {
@@ -32,6 +37,12 @@ const outputSchema = {
   rows: z.array(z.record(z.string(), z.unknown())),
   leaders: z.record(z.string(), z.unknown()),
   coverage: z.array(z.record(z.string(), z.unknown())),
+  overlap: z.object({
+    methodology: z.record(z.string(), z.unknown()),
+    coverage: z.array(z.record(z.string(), z.unknown())),
+    pairs: z.array(z.record(z.string(), z.unknown())),
+    warnings: z.array(z.string()),
+  }).optional(),
   warnings: z.array(z.string()),
 };
 
@@ -55,7 +66,7 @@ export function registerCompareEtfs(server: McpServer): void {
       title: "Compare ETFs",
       annotations: { readOnlyHint: true },
       description:
-        "Return a normalized side-by-side comparison of two to ten ETFs across selected classification, market, fund-data, cost, income, benchmark, price-performance, price-risk, and holdings modules. Leaders are mechanical extrema, not recommendations. Currency and partial-holdings caveats are explicit. Read-only.",
+        "Return a normalized side-by-side comparison of two to ten ETFs across selected classification, market, fund-data, cost, income, benchmark, price-performance, price-risk, holdings, and optional overlap modules. Include overlap to measure pairwise shared securities and weighted overlap from latest stored holdings, matched by security identity rather than ticker alone; cash, currency and derivatives are excluded. Missing holdings make overlap unavailable, while partial holdings make it a lower bound. Only requested modules run; overlap alone fetches no price history. Leaders are mechanical extrema, not recommendations. Currency, holdings dates and coverage caveats are explicit. Read-only.",
       inputSchema,
       outputSchema,
     },
@@ -66,7 +77,8 @@ export function registerCompareEtfs(server: McpServer): void {
         if (tickers.length < 2) throw new Error("At least two distinct ETF tickers are required.");
         const include = [...new Set(args.include)];
         const needsPrices = include.some((module) => ["market", "performance", "risk"].includes(module));
-        const needsHoldings = include.includes("holdings");
+        const needsOverlap = include.includes("overlap");
+        const needsHoldings = include.includes("holdings") || needsOverlap;
         // Enough bars to reach the window's anchor even across holidays (weekday bars ~0.71/day).
         const limit = Math.min(1400, Math.max(2, Math.ceil((args.performanceDays + 45) * 0.75) + 15));
 
@@ -76,14 +88,15 @@ export function registerCompareEtfs(server: McpServer): void {
             findExactEtf(ticker),
             safe(bullrunGet<EtfProfile>(`/api/etfs/${enc}/profile`)),
             needsPrices ? safe(bullrunGet<EtfPrice[]>(`/api/prices/${enc}`, { limit })) : Promise.resolve(null),
-            needsHoldings ? safe(bullrunGet<EtfHolding[]>(`/api/etfs/${enc}/holdings`)) : Promise.resolve(null),
+            needsHoldings ? settle(bullrunGet<EtfHolding[]>(`/api/etfs/${enc}/holdings`)) : Promise.resolve(NOT_REQUESTED),
           ]);
           const window = anchoredWindow(pricesAscending(priceResult), args.performanceDays);
-          return { ticker, identity, profile, prices: window.rows, windowComplete: window.complete, holdings: holdingResult ?? [] };
+          return { ticker, identity, profile, prices: window.rows, windowComplete: window.complete,
+            holdings: holdingResult.data ?? [], holdingsFailure: holdingResult.failure };
         }));
 
         const unresolved = bundles
-          .filter(({ identity, profile, prices }) => identity == null && profile == null && prices.length === 0)
+          .filter(({ identity, profile, prices, holdings }) => identity == null && profile == null && prices.length === 0 && holdings.length === 0)
           .map(({ ticker }) => ticker);
         const rows = bundles.map(({ ticker, identity, profile, prices, windowComplete, holdings }) => {
           const row: Record<string, unknown> = {
@@ -92,8 +105,7 @@ export function registerCompareEtfs(server: McpServer): void {
             name: profile?.fundName ?? identity?.company ?? null,
           };
           if (include.includes("classification")) Object.assign(row, {
-            category: profile?.category ?? identity?.sector ?? null,
-            focus: profile?.assetClass ?? identity?.industry ?? null,
+            ...etfClassification(profile, identity),
             region: profile?.region ?? null,
             domicile: profile?.domicile ?? identity?.country ?? null,
           });
@@ -166,6 +178,13 @@ export function registerCompareEtfs(server: McpServer): void {
         }
         if (include.includes("fund_data")) warnings.push("AUM and NAV currencies are not stored; cross-currency comparisons are not normalized.");
         if (include.includes("holdings") && rows.some((row) => row.holdingsComplete !== true)) warnings.push("At least one ETF has partial or unknown holdings coverage.");
+        // With overlap requested its own warnings name the failed reads.
+        const failedHoldings = bundles.filter((bundle) => bundle.holdingsFailure);
+        if (include.includes("holdings") && !needsOverlap && failedHoldings.length) {
+          warnings.push(failureText(`Holdings for ${failedHoldings.map((bundle) => bundle.ticker).join(", ")}`, failedHoldings[0].holdingsFailure!));
+        }
+        const overlap = needsOverlap ? calculateEtfOverlap(bundles, args.topSharedLimit) : undefined;
+        if (overlap) warnings.push(...overlap.warnings);
 
         return toolResult({
           tickers,
@@ -179,6 +198,7 @@ export function registerCompareEtfs(server: McpServer): void {
             lowestVolatility: leader(rows, "volatilityAnnualizedPct", "min"),
           },
           coverage,
+          ...(overlap ? { overlap } : {}),
           warnings,
         });
       } catch (err) {
