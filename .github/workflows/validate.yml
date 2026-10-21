@@ -27,7 +27,10 @@ jobs:
           package = json.loads((root / "package.json").read_text())
 
           assert server["name"] == "org.bull-run/bullrun"
-          assert server["title"] == "Bullrun"
+          # Display copy can change; stable identity is pinned above and below.
+          assert isinstance(server["title"], str) and server["title"].strip(), (
+              "server.json title must be a non-empty string"
+          )
           assert server["repository"]["url"] == "https://github.com/ferinator/bullrun-mcp"
 
           # Pinning a literal version made every release edit this file. What actually
@@ -41,7 +44,9 @@ jobs:
           remote_urls = [remote["url"] for remote in server.get("remotes", [])]
           assert "https://mcp.bull-run.org/mcp" in remote_urls
 
-          assert glama["name"] == "Bullrun"
+          assert glama["name"] == server["title"], (
+              f'glama.json name {glama["name"]!r} != server.json title {server["title"]!r}'
+          )
           assert "finance" in glama.get("keywords", [])
 
           for url in [server["repository"]["url"], *remote_urls]:
