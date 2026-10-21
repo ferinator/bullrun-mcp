@@ -73,7 +73,7 @@ before(async () => {
     requests.push({ method: req.method, url: request });
     const ticker = decodeURIComponent(request.pathname.split("/")[3] ?? "");
     try {
-      await new Promise(resolve => setTimeout(resolve, mode === "timeout" && ticker === "AAA" ? 450 : 15));
+      await new Promise(resolve => setTimeout(resolve, 15));
       if (mode === "all-failed" || mode === "partial-failure" && ticker === "BBB") {
         res.writeHead(503, { "content-type": "application/json" });
         res.end(JSON.stringify({ error: "private-upstream-host secret-token body" }));
@@ -85,7 +85,8 @@ before(async () => {
   });
   await new Promise(resolve => upstream.listen(0, "127.0.0.1", resolve));
   process.env.BULLRUN_API_BASE = `http://127.0.0.1:${upstream.address().port}`;
-  process.env.BULLRUN_API_TIMEOUT_MS = "150";
+  // Large graph fixtures must not time out under parallel CI load.
+  process.env.BULLRUN_API_TIMEOUT_MS = "5000";
   ({ registerCompareCompanyExposures } = await import("../dist/tools/compareCompanyExposures.js"));
   ({ runWithAuth } = await import("../dist/auth/context.js"));
   registerCompareCompanyExposures({ registerTool(_name, _definition, handler) { callback = handler; } });
@@ -292,15 +293,23 @@ test("in-progress graphs and valid empty graphs do not imply complete real-world
   });
 });
 
-test("upstream timeouts retain partial results and auth failures make no requests", async () => {
-  reset("timeout");
+test("upstream timeouts retain partial results and auth failures make no requests", async t => {
+  reset();
+  const originalFetch = globalThis.fetch;
+  // Inject the transport failure so this case does not depend on CI timer scheduling.
+  const timeoutFetch = t.mock.method(globalThis, "fetch", async (url, options) => {
+    if (new URL(url).pathname === "/api/stocks/AAA/relationships") {
+      throw new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    }
+    return originalFetch(url, options);
+  });
   await withClient(async client => {
     const result = await call(client);
     assert.equal(result.isError, undefined);
     assert.equal(result.structuredContent.companies[0].status, "unavailable");
     assert.equal(result.structuredContent.companies[1].status, "available");
   });
-  await new Promise(resolve => setTimeout(resolve, 460));
+  timeoutFetch.mock.restore();
   reset();
   const result = await runWithAuth({ token: "test", scopes: [] }, () => callback({ tickers: ["AAA", "BBB"], roles: ["suppliers"], verifiedOnly: false, limitPerCompany: 25 }));
   assert.equal(result.isError, true);
