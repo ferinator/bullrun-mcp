@@ -1,0 +1,27 @@
+{
+  "name": "bullrun",
+  "displayName": "Bullrun: Global Stock & UCITS ETF Research",
+  "version": "1.0.0",
+  "description": "Research global stocks and UCITS ETFs with Bullrun's stored data, no sign-in needed: compare the UCITS funds on one index by disclosed fee across venues, and run a dated company deep dive that names its data gaps. Descriptive research only, not investment advice.",
+  "author": {
+    "name": "Bullrun",
+    "email": "bullrun-info@protonmail.com",
+    "url": "https://bull-run.org"
+  },
+  "homepage": "https://bull-run.org/mcp",
+  "repository": "https://github.com/ferinator/bullrun-mcp",
+  "license": "MIT",
+  "keywords": [
+    "stocks",
+    "etf",
+    "ucits",
+    "investing",
+    "financial-research",
+    "portfolio",
+    "europe"
+  ],
+  "icon": "./assets/bullrun-icon.png",
+  "documentationUrl": "https://github.com/ferinator/bullrun-mcp/blob/main/plugin/README.md",
+  "supportUrl": "https://github.com/ferinator/bullrun-mcp/issues",
+  "privacyPolicyUrl": "https://bull-run.org/privacy"
+}

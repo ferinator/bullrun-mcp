@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "bullrun": {
+      "type": "http",
+      "url": "https://mcp.bull-run.org/research/mcp"
+    }
+  }
+}
