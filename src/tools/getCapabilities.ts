@@ -46,7 +46,7 @@ export function registerGetCapabilities(server: McpServer): void {
       try {
         const caps = await bullrunGet<Capabilities>("/api/portfolios/capabilities");
         const shortlist = { read: auth.scopes.includes("read:shortlist"), save: auth.scopes.includes("write:shortlist") };
-        const payload = { ...caps, shortlist, usageModel: "Features are available to signed-in free accounts subject to daily usage and portfolio limits. isPro denotes uncapped daily usage; it does not unlock extra features." };
+        const payload = { ...caps, shortlist, usageModel: "Features are available to signed-in free accounts subject to usage and portfolio limits. MCP research allowance: without an account about 50-100 tool calls a day and at least a week of use each month; a signed-in free account triples that. isPro removes the daily and monthly caps (fair use applies); it does not unlock extra features." };
         return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

@@ -40,7 +40,7 @@ export function registerPrompts(server: McpServer): void {
         'For two or more matches, compare at most three returned exact tickers with compare_stocks, including fundamentals, quality, valuation and risk. For one match use get_stock_metrics and get_company_risk. ' +
         "Explain the main differences, source dates, currencies and missing data. If forecast scores were requested, retain their returned rank context instead of substituting valuation scores. " +
         "A valuation gap is descriptive pricing context, not an expected return or buy signal; a forecast score is a relative rank, not a price target. Reuse returned scores instead of recomputing them or requesting server-generated research. " +
-        "Show a useful returned Bullrun continuation link. Do not save a shortlist or create a portfolio unless I explicitly request that action.",
+        "Include a returned bull-run.org link only where it adds to the answer. Do not save a shortlist or create a portfolio unless I explicitly request that action.",
       } }],
     }),
   );
@@ -61,7 +61,7 @@ export function registerPrompts(server: McpServer): void {
         "\n\nUse get_etf_filter_options or get_etf_index_group without an indexKey to resolve the exact supported index key; never guess a key. Then use get_etf_index_group with that key and scope=ucits, applying my payout preference only with a supported filter. " +
         "Compare up to three returned funds with disclosed fees, domicile, payout and trading venues. Use compare_etfs with costs and overlap modules for two or more exact listing tickers, choosing one listing per distinct fund ISIN; multiple venue listings of the same fund are not diversification. " +
         "Ongoing expense ratio is only one cost component. Do not invent spreads, broker fees, tax effects or tracking difference, and do not call a truncated or partial set the exhaustive cheapest choice. Show snapshot dates and incomplete-holdings warnings; overlap based on partial holdings is a lower bound. " +
-        "Use simulate_etf_cost only if I supply an investment amount/horizon and any extra cost assumptions it needs. Show the returned index or fund comparison link. Do not save or create a portfolio unless I explicitly ask.",
+        "Use simulate_etf_cost only if I supply an investment amount/horizon and any extra cost assumptions it needs. Include the returned index or fund comparison link only where it adds to the answer. Do not save or create a portfolio unless I explicitly ask.",
       } }],
     }),
   );
@@ -82,7 +82,7 @@ export function registerPrompts(server: McpServer): void {
         "If the shortlist is empty, explain how I can explicitly save researched exact tickers using save_research_shortlist. Otherwise use up to five entries, say which entries were selected and how many were omitted, and retain the returned quoteType and stored price dates. " +
         "Use compare_stocks for two or more equities and compare_etfs for two or more ETFs; use the appropriate snapshot for a single entry. Do not send ETF symbols to stock-only tools or guess an unknown instrument type. " +
         "If recent company news is relevant, call get_company_news for at most three selected equities and show publication dates and cache freshness. Missing coverage is unknown, not proof there was no news or risk. " +
-        "Keep this briefing compact and show a useful returned link to my shortlist or research. Do not add/remove entries, create a portfolio, schedule monitoring or send notifications.",
+        "Keep this briefing compact; include a returned link to my shortlist only where it adds to the answer. Do not add/remove entries, create a portfolio, schedule monitoring or send notifications.",
       } }],
     }),
   );

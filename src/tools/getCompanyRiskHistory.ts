@@ -18,7 +18,7 @@ export function registerGetCompanyRiskHistory(server: McpServer): void {
     description: "Stored historical company risk category readings and their observed input changes. Shows dates, computation times, formula versions, score changes, changing input coverage and measurement bases. Use for 'how has X's risk changed?' and 'which inputs changed?'. These are retained category scores, not a complete daily series or proof of causation. Missing history is unknown, never a zero risk score. Read-only; does not run risk computation or paid discovery.",
     inputSchema: {
       ticker: z.string().trim().min(1).max(32).describe("Bullrun company ticker, e.g. AAPL, SAP or 6324.T. " + TICKER_CONVENTION),
-      limit: z.number().int().min(1).max(30).default(6).describe("Latest stored run dates to return, oldest first. Retention and gaps vary. Full detail supports at most six dates."),
+      limit: z.number().int().min(1).max(30).default(3).describe("Latest stored run dates to return, oldest first; each date carries its change from the previous stored date. Retention and gaps vary. Full detail supports at most six dates."),
       detail: z.enum(["summary", "full"]).default("summary").describe("Summary keeps scores, explanations and up to three changed inputs per category; full includes stored input terms and all returned term changes."),
     },
   }, async ({ ticker: rawTicker, limit, detail }) => {

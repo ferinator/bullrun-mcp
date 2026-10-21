@@ -47,8 +47,8 @@ const LINKED_TOOLS = new Set([
   "get_global_markets_overview", "get_country_macro", "get_macro_indicators", "get_macro_history", "get_valuation_model", "screen_valuation_model",
   "save_research_shortlist", "list_research_shortlist", "list_portfolios", "get_portfolio_context", "get_portfolio_analytics", "create_portfolio_draft", "create_position_draft", "create_portfolio_from_positions",
 ]);
-/** Stock pages offer a one-click Research Shortlist save; guests sign in first. */
-const SAVE_STOCK = "Save it to your Research Shortlist from the page to come back to it.";
+/** Stock pages offer a one-click Research Shortlist save; guests sign in first. Describes the page, never asks. */
+const SAVE_STOCK = "The page can save the stock to a Research Shortlist.";
 const RISK_SORT: Record<string, string> = { market_cap: "marketCap", score_desc: "score", score_asc: "score-asc", worsened: "move", improved: "improved", coverage: "coverage", name: "name" };
 const MACRO_PATH: Record<string, string> = {
   gdp_growth: "gdp-growth", inflation: "inflation", government_debt: "government-debt", unemployment: "unemployment",
@@ -109,7 +109,7 @@ export function continuationFor(toolName: string, args: Payload, payload: Payloa
     return link(`/stocks/${encodeURIComponent(ticker)}${analysis ? "/analysis" : ""}${toolName === "get_company_relationships" ? "#network" : toolName === "get_company_risk" ? "#dials" : ""}`,
       toolName === "get_company_relationships" ? `Explore ${ticker}'s interactive company network` : analysis ? `Explore ${ticker}'s risk dials and evidence` : `Explore ${ticker}'s charts and financials`,
       toolName === "get_company_relationships" ? `Follow suppliers, customers and competitors with their evidence and measured dependence. ${SAVE_STOCK}`
-        : analysis ? `See each risk dial with the filings and figures behind it. ${SAVE_STOCK}` : `Continue with Bullrun's charts and supporting data. ${SAVE_STOCK}`);
+        : analysis ? `See each risk dial with the filings and figures behind it. ${SAVE_STOCK}` : `Opens the company's charts and supporting data. ${SAVE_STOCK}`);
   }
   if (toolName === "screen_stocks" && payload.action !== "list_presets" || toolName === "screen_stock_presets" && payload.action === "run") {
     const query = record(payload.query);
@@ -119,7 +119,7 @@ export function continuationFor(toolName: string, args: Payload, payload: Payloa
       includeSecondary: args.includeSecondary ?? false,
     };
     const sort = text(query.sortBy) || "marketCap";
-    return link("/screener", "Open and save this stock screen", "Opens the same rules, reporting window, listing filters and sort in the interactive screener. Adjust it, then save it to a free account to rerun it later. The app displays its own result page size.",
+    return link("/screener", "Open and save this stock screen", "Opens the same rules, reporting window, listing filters and sort in the interactive screener, where the screen can be adjusted and saved to a free account. The app displays its own result page size.",
       new URLSearchParams({ filter: JSON.stringify(filter), sortBy: sort === "revenueGrowth" ? "revenueGrowthPct" : sort, order: text(query.order) || "desc", includeInactive: String(args.includeInactive ?? false) }));
   }
   if (toolName === "screen_risk_board") {

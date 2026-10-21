@@ -169,7 +169,8 @@ test('SDK exposes safe defaults, read-only tools and validates limits before API
     assert.equal(tools.length, 2);
     assert.ok(tools.every(tool => tool.annotations.readOnlyHint));
     const result = await client.callTool({name:'get_company_risk_history',arguments:{ticker:'aapl'}});
-    assert.equal(result.structuredContent.requestedDates, 6);
+    // Three dates keep the default response near 100 KB; each carries its change from the prior date.
+    assert.equal(result.structuredContent.requestedDates, 3);
     assert.equal(result.structuredContent.detail, 'summary');
     calls = [];
     const bad = await client.callTool({name:'get_company_risk_history',arguments:{ticker:'AAPL',limit:31}});

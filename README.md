@@ -8,6 +8,7 @@ An MCP server for researching stocks and ETFs beyond the US. Find global stock c
 | --- | --- |
 | Public research | `https://mcp.bull-run.org/mcp` (Streamable HTTP) |
 | Personal research and portfolios | `https://mcp.bull-run.org/account/mcp` (OAuth) |
+| Research tools only, no sign-in | `https://mcp.bull-run.org/research/mcp` (the 39 research tools, no account tools or prompts) |
 | Web app | [bull-run.org](https://bull-run.org) |
 | Registry | [`org.bull-run/bullrun`](https://registry.modelcontextprotocol.io/v0.1/servers?search=org.bull-run%2Fbullrun) |
 | Glama | [Server](https://glama.ai/mcp/servers/ferinator/bullrun-mcp) · [Connector](https://glama.ai/mcp/connectors/org.bull-run/bullrun) |
@@ -16,7 +17,7 @@ An MCP server for researching stocks and ETFs beyond the US. Find global stock c
 
 ## Connect
 
-Add the hosted endpoint as a remote MCP server in your client. Public market research is anonymous. To save a research shortlist or work with your portfolios, add the account endpoint above and authorize the requested OAuth scopes. These features, including AI-generated drafts, are available to signed-in free accounts within daily usage limits; Pro provides uncapped daily usage. Your shortlist persists in [Research Shortlist](https://bull-run.org/short-list), and paper drafts remain pending until you review and accept them. Saving never enables monitoring or email.
+Add the hosted endpoint as a remote MCP server in your client. Public market research is anonymous. To save a research shortlist or work with your portfolios, add the account endpoint above and authorize the requested OAuth scopes. These features, including AI-generated drafts, are available to signed-in free accounts. Without an account you get about 50-100 tool calls a day and at least a week of use each month; a free account triples that, and Pro removes the daily and monthly caps (fair use applies). Your shortlist persists in [Research Shortlist](https://bull-run.org/short-list), and paper drafts remain pending until you review and accept them. Saving never enables monitoring or email.
 
 ```json
 {

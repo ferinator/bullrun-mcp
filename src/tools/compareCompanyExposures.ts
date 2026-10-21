@@ -8,7 +8,8 @@ import { resolveStockTicker, TICKER_CONVENTION, tickerNotFoundText } from "./sto
 const ROLES = ["competitors", "suppliers", "customers", "partners"] as const;
 type Role = typeof ROLES[number];
 const TICKER = /^[A-Z0-9][A-Z0-9.^=_:-]{0,39}$/;
-const MAX_RESULT_BYTES = 220 * 1024;
+// Five companies at the default limit reach ~225 KB; non-shared rows are trimmed first.
+const MAX_RESULT_BYTES = 120 * 1024;
 interface Node { id: string; name: string | null; ticker: string | null; role: string | null }
 interface Metric { metricType?: string; value?: number | null; unit?: string; period?: string; measurementClass?: string; note?: string }
 interface Evidence { sourceUrl?: string; title?: string; sourceType?: string; publishedAt?: string }

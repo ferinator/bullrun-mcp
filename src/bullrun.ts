@@ -9,6 +9,9 @@ import { getAuth } from "./auth/context.js";
 import { getMcpUsage } from "./usage/context.js";
 import { getGateway } from "./gateway/context.js";
 import { gatewayHeaders } from "./gateway/mcprush.js";
+import { clientIpHeaders } from "./usage/clientIp.js";
+import { SCREEN_PATHS, screenGate } from "./usage/screenGate.js";
+import { parseQuotaNotice } from "./usage/allowance.js";
 
 const DEFAULT_BASE = "http://localhost:8085";
 const DEFAULT_AUTH_SERVER = "https://bull-run.org";
@@ -68,6 +71,7 @@ export async function bullrunGet<T>(path: string, params?: QueryParams, timeoutM
     Accept: "application/json",
     "X-Bullrun-Client": "mcp",
     ...gatewayHeaders("GET", url),
+    ...clientIpHeaders("GET", url),
   };
   const auth = getAuth();
   if (auth?.token) {
@@ -85,9 +89,11 @@ export async function bullrunGet<T>(path: string, params?: QueryParams, timeoutM
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`Failed to reach bullrun-api at ${config.apiBase} (${reason})`);
   }
+  countRead(res);
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
+    noteQuotaExhausted(res.status, body);
     const detail = body ? ` - ${body.slice(0, 300)}` : "";
     throw new Error(`bullrun-api ${res.status} ${res.statusText} for ${url.pathname}${url.search}${detail}`);
   }
@@ -108,12 +114,19 @@ function upstreamTimeout(timeoutMs?: number): number {
  */
 export async function bullrunPost<T>(path: string, body?: unknown, timeoutMs?: number): Promise<T> {
   const url = new URL(path.startsWith("/") ? path : `/${path}`, config.apiBase);
+  // Whole-universe screens queue for one of a few slots; see usage/screenGate.ts.
+  return SCREEN_PATHS.has(url.pathname)
+    ? screenGate.run(() => sendPost<T>(url, body, timeoutMs))
+    : sendPost<T>(url, body, timeoutMs);
+}
 
+async function sendPost<T>(url: URL, body: unknown, timeoutMs?: number): Promise<T> {
   const headers: Record<string, string> = {
     Accept: "application/json",
     "Content-Type": "application/json",
     "X-Bullrun-Client": "mcp",
     ...gatewayHeaders("POST", url),
+    ...clientIpHeaders("POST", url),
   };
   const auth = getAuth();
   if (auth?.token) {
@@ -133,14 +146,37 @@ export async function bullrunPost<T>(path: string, body?: unknown, timeoutMs?: n
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`Failed to reach bullrun-api at ${config.apiBase} (${reason})`);
   }
+  countRead(res);
 
   if (!res.ok) {
     const text = await res.text().catch(() => "");
+    noteQuotaExhausted(res.status, text);
     const detail = text ? ` - ${text.slice(0, 300)}` : "";
     throw new Error(`bullrun-api ${res.status} ${res.statusText} for ${url.pathname}${detail}`);
   }
 
   return (await res.json()) as T;
+}
+
+/** Per-tool-call read counts for the mcp_tool_call analytics row (usage/invocations.ts). */
+function countRead(res: Response): void {
+  const reads = getMcpUsage()?.reads;
+  if (!reads) return;
+  reads.apiCalls++;
+  // bullrun-api names the pool when it charged this request, including on a 404 after the charge.
+  if (res.headers.get("X-Bullrun-Quota-Category")) reads.meteredReads++;
+}
+
+/**
+ * Remembers on the tool call that an MCP allowance ran out, so the call answers with the plain
+ * allowance message instead of the tool's own "could not be loaded" wording (usage/invocations.ts).
+ * The error is still thrown, so tools behave as before until then.
+ */
+function noteQuotaExhausted(status: number, body: string): void {
+  if (status !== 429) return;
+  const reads = getMcpUsage()?.reads;
+  if (!reads || reads.exhausted) return;
+  reads.exhausted = parseQuotaNotice(body);
 }
 
 function addMcpUsageHeaders(headers: Record<string, string>): void {

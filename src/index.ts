@@ -7,6 +7,7 @@ import { createMcpServer } from "./mcpServer.js";
 import { config } from "./bullrun.js";
 import { runWithAuth } from "./auth/context.js";
 import { runWithMcpUsage, type McpUsageContext } from "./usage/context.js";
+import { clientIpFromRequest } from "./usage/clientIp.js";
 import { verifyAccessToken } from "./auth/tokenVerifier.js";
 import { protectedResourceMetadata, wwwAuthenticate, PRM_PATH } from "./auth/protectedResource.js";
 import { MCPRUSH_PATH, gatewaySessionOwner, mcprushEnabled, mcprushGate } from "./gateway/mcprush.js";
@@ -36,6 +37,14 @@ const AUTH_MCP_PATH = process.env.MCP_AUTH_PATH ?? "/account/mcp";
 // Opt-in compatibility catalog for clients using the four v0.7 tool names.
 const LEGACY_MCP_PATH = "/legacy/mcp";
 const LEGACY_AUTH_MCP_PATH = "/account/legacy/mcp";
+/**
+ * Public research catalog for directories that list no-authentication connectors: only the
+ * tools that work without sign-in (no portfolio, draft, shortlist or capability tools, no
+ * prompts), so every listed tool succeeds for an anonymous caller. Open regardless of
+ * MCP_REQUIRE_AUTH; a presented token is still validated.
+ */
+const RESEARCH_MCP_PATH = "/research/mcp";
+type Catalog = "full" | "legacy" | "research";
 
 app.get("/health", (_req: Request, res: Response) => {
   res.json({
@@ -51,6 +60,7 @@ app.get("/health", (_req: Request, res: Response) => {
       loginEndpoint: AUTH_MCP_PATH,
       legacyEndpoint: LEGACY_MCP_PATH,
       legacyLoginEndpoint: LEGACY_AUTH_MCP_PATH,
+      researchEndpoint: RESEARCH_MCP_PATH,
     },
     sessions: { open: sessions.size, max: MAX_SESSIONS, idleTtlSeconds: Math.round(SESSION_IDLE_TTL_MS / 1000) },
     uptimeSeconds: Math.round(process.uptime()),
@@ -97,20 +107,21 @@ app.get("/.well-known/mcprush.com-claim.txt", (_req: Request, res: Response) => 
 /**
  * Auth gate for `/mcp`-style requests (Phase 3 / T3.2). When a bearer token is present it is
  * validated and the caller is run inside an AsyncLocalStorage context so tools forward it to
- * bullrun-api. `alwaysRequire` forces the challenge on a missing token regardless of
- * MCP_REQUIRE_AUTH (used by the dedicated login path); otherwise behaviour by mode:
+ * bullrun-api. "required" forces the challenge on a missing token regardless of
+ * MCP_REQUIRE_AUTH (used by the dedicated login path), "optional" never challenges a missing
+ * token (the public research path); "configured" behaves by mode:
  *   - requireAuth (default): a missing OR invalid token -> 401 + WWW-Authenticate (the
  *     discovery trigger that makes an MCP client start the OAuth flow).
  *   - authless (MCP_REQUIRE_AUTH=false): no token -> proceed anonymously; but a token that
  *     IS supplied must still be valid (never silently downgrade a presented credential).
  */
-function authGate(alwaysRequire: boolean) {
+function authGate(policy: "configured" | "required" | "optional") {
   return async (req: Request, res: Response, next: NextFunction): Promise<void> => {
     const header = req.headers.authorization;
     const bearer = header?.startsWith("Bearer ") ? header.slice(7).trim() : undefined;
 
     if (!bearer) {
-      if (alwaysRequire || config.requireAuth) {
+      if (policy === "required" || (policy === "configured" && config.requireAuth)) {
         respondChallenge(res);
         return;
       }
@@ -133,10 +144,11 @@ function authGate(alwaysRequire: boolean) {
 // `/mcp`: auth governed by MCP_REQUIRE_AUTH (open in authless mode for public + directory use).
 // `AUTH_MCP_PATH`: always requires a valid token, so an unauthenticated client gets the 401
 // that drives a Claude connector into the OAuth sign-in flow.
-app.use("/mcp", authGate(false));
-app.use(AUTH_MCP_PATH, authGate(true));
-app.use(LEGACY_MCP_PATH, authGate(false));
-app.use(LEGACY_AUTH_MCP_PATH, authGate(true));
+app.use("/mcp", authGate("configured"));
+app.use(AUTH_MCP_PATH, authGate("required"));
+app.use(LEGACY_MCP_PATH, authGate("configured"));
+app.use(LEGACY_AUTH_MCP_PATH, authGate("required"));
+app.use(RESEARCH_MCP_PATH, authGate("optional"));
 app.use(MCPRUSH_PATH, mcprushGate);
 
 /** Emit a 401 with the RFC 9728 challenge pointing at our Protected Resource Metadata. */
@@ -171,8 +183,8 @@ interface Session {
   transport: StreamableHTTPServerTransport;
   /** Marketplace transports cannot be reused by public routes or another installation. */
   gatewayOwner?: string;
-  /** Modern and compatibility sessions cannot be reused across catalogs. */
-  legacyTools: boolean;
+  /** Full, compatibility and research sessions cannot be reused across catalogs. */
+  catalog: Catalog;
   lastActivity: number;
   /** Requests still being answered, including an open GET SSE stream; never evicted while > 0. */
   inFlight: number;
@@ -237,11 +249,11 @@ async function handleMcpPost(req: Request, res: Response): Promise<void> {
   const sessionId = firstHeader(req.headers["mcp-session-id"]);
   const session = sessionId ? sessions.get(sessionId) : undefined;
   const gatewayOwner = gatewaySessionOwner();
-  const legacyTools = isLegacyCatalog(req);
+  const catalog = catalogFor(req);
   let transport: StreamableHTTPServerTransport;
 
   if (session) {
-    if (session.gatewayOwner !== gatewayOwner || session.legacyTools !== legacyTools) {
+    if (session.gatewayOwner !== gatewayOwner || session.catalog !== catalog) {
       respondSessionNotFound(res);
       return;
     }
@@ -260,7 +272,7 @@ async function handleMcpPost(req: Request, res: Response): Promise<void> {
       sessionIdGenerator: () => randomUUID(),
       enableJsonResponse: gatewayOwner !== undefined,
       onsessioninitialized: (sid) => {
-        sessions.set(sid, { transport: created, gatewayOwner, legacyTools, lastActivity: Date.now(), inFlight: 0 });
+        sessions.set(sid, { transport: created, gatewayOwner, catalog, lastActivity: Date.now(), inFlight: 0 });
       },
     });
     // Set before connect(): the server wraps this handler rather than replacing it. The
@@ -269,7 +281,8 @@ async function handleMcpPost(req: Request, res: Response): Promise<void> {
       const sid = created.sessionId;
       if (sid && sessions.get(sid)?.transport === created) sessions.delete(sid);
     };
-    const server = createMcpServer({ researchOnly: gatewayOwner !== undefined, legacyTools });
+    const server = createMcpServer({ researchOnly: catalog === "research", marketplace: gatewayOwner !== undefined,
+      legacyTools: catalog === "legacy" });
     await server.connect(created);
     transport = created;
   }
@@ -294,6 +307,7 @@ app.post("/mcp", handleMcpPost);
 app.post(AUTH_MCP_PATH, handleMcpPost);
 app.post(LEGACY_MCP_PATH, handleMcpPost);
 app.post(LEGACY_AUTH_MCP_PATH, handleMcpPost);
+app.post(RESEARCH_MCP_PATH, handleMcpPost);
 app.post(MCPRUSH_PATH, handleMcpPost);
 app.all(MCPRUSH_PATH, (_req: Request, res: Response) => {
   res.setHeader("Allow", "POST");
@@ -308,8 +322,7 @@ async function handleSessionRequest(req: Request, res: Response): Promise<void> 
     return;
   }
   const session = sessions.get(sessionId);
-  const legacyTools = isLegacyCatalog(req);
-  if (!session || session.gatewayOwner !== gatewaySessionOwner() || session.legacyTools !== legacyTools) {
+  if (!session || session.gatewayOwner !== gatewaySessionOwner() || session.catalog !== catalogFor(req)) {
     respondSessionNotFound(res);
     return;
   }
@@ -324,6 +337,8 @@ app.get(LEGACY_MCP_PATH, handleSessionRequest);
 app.delete(LEGACY_MCP_PATH, handleSessionRequest);
 app.get(LEGACY_AUTH_MCP_PATH, handleSessionRequest);
 app.delete(LEGACY_AUTH_MCP_PATH, handleSessionRequest);
+app.get(RESEARCH_MCP_PATH, handleSessionRequest);
+app.delete(RESEARCH_MCP_PATH, handleSessionRequest);
 
 app.listen(config.port, () => {
   console.log(`bullrun-mcp listening on :${config.port} (MCP at /mcp, health at GET /health)`);
@@ -334,6 +349,7 @@ app.listen(config.port, () => {
       : `Authless mode (MCP_REQUIRE_AUTH=false): /mcp open; tokens still validated if presented`,
   );
   console.log(`Login-required endpoint at ${AUTH_MCP_PATH} -> always 401-challenges anonymous callers into OAuth login`);
+  console.log(`Public research endpoint at ${RESEARCH_MCP_PATH} -> research tools only, never requires sign-in`);
   console.log(`Marketplace research endpoint at ${MCPRUSH_PATH}: ${mcprushEnabled ? "configured" : "disabled until credentials are configured"}`);
 });
 
@@ -355,17 +371,20 @@ function mcpUsageFromRequest(req: Request): McpUsageContext | undefined {
 
   const operation = methods.size === 0 ? undefined : methods.size === 1 ? firstSetValue(methods) : "batch";
   const toolName = tools.size === 0 ? undefined : tools.size === 1 ? firstSetValue(tools) : "batch";
-  if (!sessionId && !operation && !toolName) return undefined;
-  return { sessionId, operation, toolName };
+  // Signed onto each API request so anonymous reads are metered per caller, not as one pool.
+  const clientIp = clientIpFromRequest(req);
+  if (!sessionId && !operation && !toolName && !clientIp) return undefined;
+  return { sessionId, operation, toolName, clientIp };
 }
 
 function firstHeader(value: string | string[] | undefined): string | undefined {
   return Array.isArray(value) ? value[0] : value;
 }
 
-function isLegacyCatalog(req: Request): boolean {
+function catalogFor(req: Request): Catalog {
   const path = req.path.toLowerCase().replace(/\/+$/, "");
-  return path === LEGACY_MCP_PATH || path === LEGACY_AUTH_MCP_PATH;
+  if (path === LEGACY_MCP_PATH || path === LEGACY_AUTH_MCP_PATH) return "legacy";
+  return path === RESEARCH_MCP_PATH ? "research" : "full";
 }
 
 function envPositiveInt(name: string, fallback: number): number {

@@ -16,9 +16,10 @@ Use one of these endpoints per client: `/mcp` to try research anonymously, or
 guarantee that a client will offer login. Anonymous stdio is also available.
 
 The [MCP product page](https://bull-run.org/mcp) explains the workflows and endpoint choices.
-Every feature is available on a free Bullrun account within usage limits; Pro offers higher
-usage at CHF 5/month or CHF 50/year. MCP fair-use budgets are separate from website quotas,
-and one tool can perform multiple backend reads.
+Without an account you get about 50-100 tool calls a day and at least a week of use each
+month. Every feature is available on a free Bullrun account, which triples that allowance; Pro
+removes the daily and monthly caps (fair use applies) at CHF 5/month or CHF 50/year. MCP
+allowances are separate from website quotas, and one tool can perform multiple backend reads.
 
 > No JSON editing required for Claude — add the remote URL in the connector settings. The configs
 > below are for clients that connect via a file.

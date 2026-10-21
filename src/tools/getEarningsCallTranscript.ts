@@ -37,7 +37,7 @@ const inputSchema = {
     .describe("Optional fiscal quarter filter."),
   search: z.string().optional()
     .describe("Optional case-insensitive text/speaker search across transcript chunks."),
-  maxChunks: z.number().int().min(1).max(200).default(80)
+  maxChunks: z.number().int().min(1).max(200).default(40)
     .describe("Maximum speaker-tagged transcript chunks to return."),
   maxCharsPerChunk: z.number().int().min(200).max(4000).default(1600)
     .describe("Maximum characters per transcript chunk in the MCP response."),

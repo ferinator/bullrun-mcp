@@ -194,7 +194,7 @@ test("saved shortlist links contain no ticker basket or account identity", () =>
 test("labels name the action waiting on the page instead of a generic visit", () => {
   const label = (tool, args, payload) => destination(tool, args, payload).link.label;
   assert.equal(label("screen_stocks", {}, { action: "run", query: { rules: [] } }), "Open and save this stock screen");
-  assert.match(destination("screen_stocks", {}, { action: "run", query: { rules: [] } }).link.description, /save it to a free account/);
+  assert.match(destination("screen_stocks", {}, { action: "run", query: { rules: [] } }).link.description, /saved to a free account/);
   assert.equal(label("get_company_relationships", { ticker: "AAPL" }, { subject: { nodeId: "1" } }), "Explore AAPL's interactive company network");
   assert.equal(label("compare_company_exposures", {}, { companies: [{ ticker: "AAPL", subject: { nodeId: "1" } }] }), "Explore AAPL's interactive company network");
   for (const name of ["create_portfolio_draft", "create_position_draft", "create_portfolio_from_positions"]) {
