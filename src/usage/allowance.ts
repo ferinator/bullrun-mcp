@@ -15,7 +15,7 @@ export interface QuotaNotice {
   resetAt?: string;
 }
 
-const POOLS = new Set(["caller", "anonymous_total", "shared", "probe", "account", "pro", "installation"]);
+const POOLS = new Set(["caller", "anonymous_total", "shared", "probe", "account", "pro", "installation", "mcp_calls"]);
 
 /** The notice in a 429 body, or undefined for any other 429 (e.g. the website's own quotas or nginx). */
 export function parseQuotaNotice(body: string): QuotaNotice | undefined {
@@ -46,8 +46,13 @@ export function allowanceMessage(notice: QuotaNotice, caller: { signedIn: boolea
   const period = month ? "this month's" : "today's";
   const span = month ? "30 days" : notice.window === "24h" ? "24 hours" : notice.window.replace(/h$/, " hours");
   const back = `More reads free up ${whenReadsReturn(notice.resetAt)}.`;
+  if (notice.pool === "mcp_calls") {
+    return `This free MCP connection has used its ${notice.limit.toLocaleString("en-US")} successful tool calls per rolling 30 days. `
+      + `More calls become available ${whenReadsReturn(notice.resetAt)}. Subscribe for higher MCP usage: ${PRICING_URL}. `
+      + "The website remains available for free manual screening and research. This is a usage allowance, not a coverage answer.";
+  }
   const notCoverage = "This is a usage allowance, not a gap in Bullrun's data.";
-  const upgradeAnonymous = `Connect a free Bullrun account at ${ACCOUNT_ENDPOINT} for 3x more, or go Pro to remove the daily and monthly caps: ${PRICING_URL}`;
+  const upgradeAnonymous = `Connect a free Bullrun account at ${ACCOUNT_ENDPOINT} to save your research, or go Pro for higher MCP usage: ${PRICING_URL}`;
 
   if (caller.marketplace || notice.pool === "installation") {
     return `This marketplace installation has used ${period} Bullrun research allowance (${reads(notice.limit)} in ${span}). ${back} ${notCoverage}`;
@@ -61,7 +66,7 @@ export function allowanceMessage(notice: QuotaNotice, caller: { signedIn: boolea
   }
   if (notice.pool === "anonymous_total") {
     return `Bullrun's free capacity for connections without an account is used up for now, across all users. ${back} `
-      + `A free Bullrun account at ${ACCOUNT_ENDPOINT} keeps working meanwhile, with 3x the anonymous allowance. ${notCoverage}`;
+      + `You can continue manual research on the website, or connect a Bullrun account at ${ACCOUNT_ENDPOINT}. ${notCoverage}`;
   }
   return `You've used ${period} free Bullrun allowance on this connection (${reads(notice.limit)} in ${span}). ${back} `
     + `${upgradeAnonymous}. ${notCoverage}`;

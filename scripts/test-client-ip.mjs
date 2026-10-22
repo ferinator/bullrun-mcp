@@ -213,7 +213,7 @@ test('the run-out message names the window, when reads return and the next step 
   assert.match(anonMonth, /this month's free Bullrun allowance/)
   assert.match(anonMonth, /3,500 data reads in 30 days/)
   assert.match(anonMonth, /from 2026-11-20 10:05 UTC/)
-  assert.ok(anonMonth.includes(`${ACCOUNT_ENDPOINT} for 3x more`))
+  assert.ok(anonMonth.includes(`${ACCOUNT_ENDPOINT} to save your research`))
   assert.ok(anonMonth.includes(PRICING_URL))
   const anonDay = allowanceMessage({ pool: 'caller', window: '24h', limit: 500, resetAt: at }, { signedIn: false, marketplace: false })
   assert.match(anonDay, /today's free Bullrun allowance .*500 data reads in 24 hours/)

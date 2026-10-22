@@ -17,7 +17,7 @@ An MCP server for researching stocks and ETFs beyond the US. Find global stock c
 
 ## Connect
 
-Add the hosted endpoint as a remote MCP server in your client. Public market research is anonymous. To save a research shortlist or work with your portfolios, add the account endpoint above and authorize the requested OAuth scopes. These features, including AI-generated drafts, are available to signed-in free accounts. Without an account you get about 50-100 tool calls a day and at least a week of use each month; a free account triples that, and Pro removes the daily and monthly caps (fair use applies). Your shortlist persists in [Research Shortlist](https://bull-run.org/short-list), and paper drafts remain pending until you review and accept them. Saving never enables monitoring or email.
+Add the hosted endpoint as a remote MCP server in your client. Public market research is anonymous. To save a research shortlist or work with your portfolios, add the account endpoint above and authorize the requested OAuth scopes. These features, including AI-generated drafts, are available to signed-in free accounts. Free use includes **700 successful MCP tool calls per rolling 30 days**, per free account or anonymous network, shared across the official public, research and OAuth endpoints. Failed tool calls do not spend that allowance. Separate backend read safety limits and per-tool pacing can pause use earlier. Pro and active trials are outside the free call cap and retain fair use of 1,000 backend reads per rolling 5 hours. Website quotas are unchanged. Your shortlist persists in [Research Shortlist](https://bull-run.org/short-list), and paper drafts remain pending until you review and accept them. Saving never enables monitoring or email.
 
 ```json
 {

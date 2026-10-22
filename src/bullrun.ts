@@ -10,7 +10,7 @@ import { getMcpUsage } from "./usage/context.js";
 import { getGateway } from "./gateway/context.js";
 import { gatewayHeaders } from "./gateway/mcprush.js";
 import { clientIpHeaders } from "./usage/clientIp.js";
-import { SCREEN_PATHS, screenGate } from "./usage/screenGate.js";
+import { SCREEN_MAX_WAIT_MS, SCREEN_PATHS, screenGate } from "./usage/screenGate.js";
 import { parseQuotaNotice } from "./usage/allowance.js";
 
 const DEFAULT_BASE = "http://localhost:8085";
@@ -102,8 +102,18 @@ export async function bullrunGet<T>(path: string, params?: QueryParams, timeoutM
 }
 
 function upstreamTimeout(timeoutMs?: number): number {
+  return Math.max(1, Math.min(timeoutMs ?? config.requestTimeoutMs, gatewayTimeLeft() ?? Infinity));
+}
+
+/** The gateway deadline includes time spent in the screen queue, not just the fetch. */
+function gatewayTimeLeft(): number | undefined {
   const deadline = getGateway()?.deadline;
-  return Math.max(1, Math.min(timeoutMs ?? config.requestTimeoutMs, deadline ? deadline - Date.now() : Infinity));
+  if (deadline === undefined) return undefined;
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) {
+    throw new Error("Marketplace research deadline reached. Request fewer rows, modules or periods, or retry later.");
+  }
+  return remaining;
 }
 
 /**
@@ -116,7 +126,7 @@ export async function bullrunPost<T>(path: string, body?: unknown, timeoutMs?: n
   const url = new URL(path.startsWith("/") ? path : `/${path}`, config.apiBase);
   // Whole-universe screens queue for one of a few slots; see usage/screenGate.ts.
   return SCREEN_PATHS.has(url.pathname)
-    ? screenGate.run(() => sendPost<T>(url, body, timeoutMs))
+    ? screenGate.run(() => sendPost<T>(url, body, timeoutMs), Math.min(SCREEN_MAX_WAIT_MS, gatewayTimeLeft() ?? Infinity))
     : sendPost<T>(url, body, timeoutMs);
 }
 

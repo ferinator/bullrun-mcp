@@ -24,7 +24,7 @@ export function registerGetCapabilities(server: McpServer): void {
       title: "Get account capabilities",
       annotations: { readOnlyHint: true },
       description:
-        "Discover what the connected Bullrun account can do BEFORE attempting an action, so you can plan instead of learning by hitting a 403. Reports whether you are authenticated and as WHICH identity (email + userId), whether the account has uncapped daily usage and why (subscription / trial / admin), the granted OAuth scopes, portfolio usage vs the free/max limits, and a per-tool entitlement map: create_portfolio_from_positions, create_portfolio_draft and create_position_draft (all available to signed-in free accounts, subject to usage limits), and whether another portfolio can be created now. Call this first when a draft/write tool might be gated, or to confirm which account a request will act on. Read-only.",
+        "Discover what the connected Bullrun account can do BEFORE attempting an action, so you can plan instead of learning by hitting a 403. Reports whether you are authenticated and as WHICH identity (email + userId), the account's Pro/trial status and why (subscription / trial / admin), the granted OAuth scopes, portfolio usage vs the free/max limits, and a per-tool entitlement map: create_portfolio_from_positions, create_portfolio_draft and create_position_draft (all available to signed-in free accounts, subject to usage limits), and whether another portfolio can be created now. Call this first when a draft/write tool might be gated, or to confirm which account a request will act on. Read-only.",
       inputSchema: {},
     },
     async () => {
@@ -46,7 +46,7 @@ export function registerGetCapabilities(server: McpServer): void {
       try {
         const caps = await bullrunGet<Capabilities>("/api/portfolios/capabilities");
         const shortlist = { read: auth.scopes.includes("read:shortlist"), save: auth.scopes.includes("write:shortlist") };
-        const payload = { ...caps, shortlist, usageModel: "Features are available to signed-in free accounts subject to usage and portfolio limits. MCP research allowance: without an account about 50-100 tool calls a day and at least a week of use each month; a signed-in free account triples that. isPro removes the daily and monthly caps (fair use applies); it does not unlock extra features." };
+        const payload = { ...caps, shortlist, usageModel: "Features are available to signed-in free accounts subject to usage and portfolio limits. Official public, research and OAuth MCP connections share an allowance of 700 successful tool calls per rolling 30 days, per free account or anonymous network. Failed tool calls do not spend it. Separate backend read safety limits and per-tool pacing can pause use earlier. Pro and active trials are outside the free call cap and retain fair use of 1,000 backend reads per rolling 5 hours; they do not unlock extra features. Website quotas are unchanged." };
         return { content: [{ type: "text", text: JSON.stringify(payload, null, 2) }] };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

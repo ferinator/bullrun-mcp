@@ -10,7 +10,7 @@
 export const SCREEN_PATHS = new Set(["/api/screener/filter", "/api/etfs/screener"]);
 
 const DEFAULT_CONCURRENCY = 3;
-const MAX_WAIT_MS = 30_000;
+export const SCREEN_MAX_WAIT_MS = 30_000;
 
 export interface Gate {
   run<T>(task: () => Promise<T>, maxWaitMs?: number): Promise<T>;
@@ -35,10 +35,12 @@ export function createGate(concurrency: number): Gate {
   return {
     get active() { return active; },
     get waiting() { return queue.length; },
-    async run(task, maxWaitMs = MAX_WAIT_MS) {
+    async run(task, maxWaitMs = SCREEN_MAX_WAIT_MS) {
+      let waitUntil: number | undefined;
       if (active < concurrency) {
         active++;
       } else {
+        waitUntil = Date.now() + maxWaitMs;
         await new Promise<void>((resolve, reject) => {
           const entry: { start: () => void; timer?: NodeJS.Timeout } = { start: resolve };
           entry.timer = setTimeout(() => {
@@ -50,6 +52,11 @@ export function createGate(concurrency: number): Gate {
         });
       }
       try {
+        // A busy event loop can deliver a released slot before its overdue timer.
+        // Release that slot again without starting work that already waited too long.
+        if (waitUntil !== undefined && Date.now() >= waitUntil) {
+          throw new Error("Bullrun is busy running other screens; retry this screen in a few seconds.");
+        }
         return await task();
       } finally {
         release();

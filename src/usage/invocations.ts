@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { z } from "zod";
 import { bullrunPost } from "../bullrun.js";
 import { getMcpUsage, runWithMcpUsage, type McpReadCount } from "./context.js";
 import { isProbeClient, PROBE_CLIENT_CLASS } from "./probes.js";
@@ -7,6 +9,8 @@ import { heavyToolCallerKey, heavyToolLimitedResult, heavyToolLimiter, type Heav
 import { allowanceMessage, quotaLabel } from "./allowance.js";
 import { getAuth } from "../auth/context.js";
 import { getGateway } from "../gateway/context.js";
+import { reserveMonthlyAllowance, finishMonthlyAllowance, monthlyLimitResult, monthlyUnavailableResult,
+  type MonthlyReservation } from "./monthlyAllowance.js";
 
 export interface ToolInvocation {
   invocationId: string;
@@ -43,12 +47,26 @@ export async function recordMcpToolInvocation<T>(
     const started = Date.now();
     let outcome: ToolInvocation["outcome"] = "throw";
     let rateLimited: boolean | undefined;
+    let monthly: MonthlyReservation | undefined;
+    let settled = false;
+    let callbackSucceeded = false;
     try {
       const retryAfter = limiter.take(toolName, heavyToolCallerKey());
       if (retryAfter > 0) {
         outcome = "error";
         rateLimited = true;
         return heavyToolLimitedResult(toolName, limiter.perMinute, retryAfter) as T;
+      }
+      try {
+        monthly = await reserveMonthlyAllowance(usage.invocationId);
+      } catch {
+        outcome = "error";
+        return monthlyUnavailableResult() as T;
+      }
+      if (monthly && !monthly.allowed) {
+        outcome = "error";
+        reads.exhausted = monthly.notice;
+        return monthlyLimitResult(monthly.notice!) as T;
       }
       let result: T;
       try {
@@ -66,8 +84,20 @@ export async function recordMcpToolInvocation<T>(
       }
       outcome = result && typeof result === "object" && "isError" in result && result.isError === true
         ? "error" : "success";
+      callbackSucceeded = outcome === "success";
+      try {
+        await finishMonthlyAllowance(monthly, outcome === "success");
+        settled = true;
+      } catch {
+        outcome = "error";
+        return (callbackSucceeded ? uncertainSettlementResult(result) : monthlyUnavailableResult()) as T;
+      }
       return result;
     } finally {
+      if (!settled && !callbackSucceeded) {
+        try { await finishMonthlyAllowance(monthly, false); }
+        catch { /* Abandoned reservations expire; a failed call never becomes a success row. */ }
+      }
       // Reporting is best-effort, bounded by a short fetch timeout, and cannot change
       // the tool result or mask its exception. No arguments or result text are sent.
       // The counts are copied first: the report is itself a bullrun-api request.
@@ -89,15 +119,61 @@ function allowanceResult(reads: McpReadCount) {
   return { isError: true, content: [{ type: "text" as const, text }] };
 }
 
+/** Preserve known write outcomes when neither settlement nor its status can be confirmed. */
+function uncertainSettlementResult(result: unknown) {
+  const completed = CallToolResultSchema.safeParse(result);
+  const payload = completed.success ? completed.data : {
+    content: [{ type: "text" as const, text: JSON.stringify(result) ?? String(result) }],
+  };
+  return { ...payload, isError: true, content: [...payload.content, { type: "text" as const, text:
+    "This tool completed, but Bullrun could not confirm its monthly usage accounting. The completed result is included above. "
+      + "A saved draft or shortlist change may already exist; review it before repeating a write. Do not automatically retry this operation." }] };
+}
+
+/** registerTool accepts either a raw Zod shape or a schema; this project uses Zod 3. */
+function toolOutputSchema(schema: unknown): z.ZodTypeAny | undefined {
+  if (schema === undefined) return undefined;
+  if (schema instanceof z.ZodType) return schema;
+  if (schema !== null && typeof schema === "object" && !Array.isArray(schema)
+      && Object.values(schema).every(field => field instanceof z.ZodType)) {
+    return z.object(schema as z.ZodRawShape);
+  }
+  throw new TypeError("Tool outputSchema must be a Zod schema or raw Zod shape.");
+}
+
+/** The SDK validates after the callback returns; quota settlement must validate first. */
+async function validateToolResult(toolName: string, result: unknown, outputSchema: z.ZodTypeAny | undefined): Promise<void> {
+  const envelope = await CallToolResultSchema.safeParseAsync(result);
+  if (!envelope.success) {
+    throw new Error(`Invalid MCP tool result for ${toolName}: ${envelope.error.message}`);
+  }
+  // Match the SDK: an error result needs a valid envelope, but no structured success payload.
+  if (envelope.data.isError || !outputSchema) return;
+  if (!envelope.data.structuredContent) {
+    throw new Error(`Output validation error: Tool ${toolName} has an output schema but no structured content was provided`);
+  }
+  const output = await outputSchema.safeParseAsync(envelope.data.structuredContent);
+  if (!output.success) {
+    throw new Error(`Output validation error: Invalid structured content for tool ${toolName}: ${output.error.message}`);
+  }
+}
+
 /** Install before tool registration; retain the SDK's generic registration signature. */
 export function instrumentMcpTools(server: McpServer): void {
   const register = server.registerTool;
   server.registerTool = ((...args: unknown[]) => {
     const callback = args[args.length - 1];
     if (typeof callback === "function") {
+      const config = args[1];
+      const outputSchema = toolOutputSchema(config !== null && typeof config === "object" && "outputSchema" in config
+        ? config.outputSchema : undefined);
       args[args.length - 1] = (...callbackArgs: unknown[]) => recordMcpToolInvocation(
         String(args[0]),
-        async () => Reflect.apply(callback, undefined, callbackArgs),
+        async () => {
+          const result: unknown = await Reflect.apply(callback, undefined, callbackArgs);
+          await validateToolResult(String(args[0]), result, outputSchema);
+          return result;
+        },
         report,
         server.server.getClientVersion(),
       );

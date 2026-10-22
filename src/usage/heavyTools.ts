@@ -80,7 +80,7 @@ export function heavyToolLimitedResult(toolName: string, perMinute: number, retr
     isError: true,
     content: [{
       type: "text" as const,
-      text: `${toolName} is limited to ${perMinute} calls per minute per connection, and that limit was reached. `
+      text: `${toolName} is limited to ${perMinute} calls per minute per caller across connections, and that limit was reached. `
         + `Retry in about ${retryAfterSeconds} s. This is a pacing limit, not a quota or a coverage answer; `
         + "narrow the request or reuse the previous result in the meantime.",
     }],
