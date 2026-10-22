@@ -14,13 +14,20 @@ interface NewsCoverage {
 const NEWS_SOURCE_LIMIT = 50;
 const STALE_AFTER_HOURS = 24;
 
-export function registerGetCompanyNews(server: McpServer): void {
+/**
+ * refresh: whether a read also asks the API to queue a background news refresh. Research-only
+ * sessions pass false so the tool only reads; queuing a job is not read-only in the directories' terms.
+ */
+export function registerGetCompanyNews(server: McpServer, { refresh = true }: { refresh?: boolean } = {}): void {
   server.registerTool("get_company_news", {
     title: "Get company news with sources and freshness",
-    // Read-only for user/domain data. The disclosed refresh/demand bookkeeping
-    // changes only operational caches, like analytics attached to other reads.
-    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true },
-    description: "Get cached company news for one exact Bullrun ticker, newest publication first, with publisher, source URL, publication date and stored-fetch freshness when recorded. Optional since cutoff and limit up to 50; only the newest 50 stored articles are searched. Useful for company headlines and article sources; use get_corporate_calendar for scheduled earnings/dividends and get_earnings_call_transcript for call text. Reading news also registers demand and requests a best-effort background cache refresh; this response does not wait for or confirm a refresh. Cached/empty/stale results do not establish that no new events exist. Does not change portfolios or place trades.",
+    // openWorldHint: articles come from an open-ended set of outside publishers and link to them.
+    annotations: { readOnlyHint: !refresh, destructiveHint: false, openWorldHint: true },
+    description: "Get cached company news for one exact Bullrun ticker, newest publication first, with publisher, source URL, publication date and stored-fetch freshness when recorded. Optional since cutoff and limit up to 50; only the newest 50 stored articles are searched. Useful for company headlines and article sources; use get_corporate_calendar for scheduled earnings/dividends and get_earnings_call_transcript for call text. "
+      + (refresh
+        ? "Reading news also registers demand and requests a best-effort background cache refresh; this response does not wait for or confirm a refresh. "
+        : "This connection reads stored articles only and does not request a refresh. ")
+      + "Cached/empty/stale results do not establish that no new events exist. Does not change portfolios or place trades.",
     inputSchema: {
       ticker: z.string().trim().min(1).max(32).describe("Bullrun company ticker, e.g. AAPL, SAP, ABBN or 6324.T. " + TICKER_CONVENTION),
       since: z.string().refine(value => newsCutoff(value) != null, "Use a real YYYY-MM-DD date or an ISO timestamp with seconds and explicit Z/UTC offset.").optional()
@@ -38,7 +45,7 @@ export function registerGetCompanyNews(server: McpServer): void {
       const identity = resolution.stock;
       const enc = encodeURIComponent(ticker);
       const [raw, manifest] = await Promise.all([
-        bullrunGet<unknown>(`/api/stocks/${enc}/news`, { limit: NEWS_SOURCE_LIMIT }, 8_000),
+        bullrunGet<unknown>(`/api/stocks/${enc}/news`, { limit: NEWS_SOURCE_LIMIT, refresh: refresh ? undefined : false }, 8_000),
         safe(bullrunGet<NewsCoverage>(`/api/stocks/${enc}/data-coverage`, undefined, 8_000)),
       ]);
       if (!Array.isArray(raw)) throw new Error("Invalid news response");
@@ -50,7 +57,9 @@ export function registerGetCompanyNews(server: McpServer): void {
       const retrievedAt = new Date().toISOString();
       const ageHours = sourceFetchedAt ? (Date.parse(retrievedAt) - Date.parse(sourceFetchedAt)) / 3_600_000 : null;
       const freshnessStatus = ageHours == null || ageHours < 0 ? "unknown" : ageHours > STALE_AFTER_HOURS ? "stale" : "recently_stored";
-      const warnings = ["The API serves cached rows immediately and may queue a background refresh after registering this ticker as requested. Refresh acceptance/completion is not returned, and it may be disabled, throttled or fail. Retry later to observe any update."];
+      const warnings = [refresh
+        ? "The API serves cached rows immediately and may queue a background refresh after registering this ticker as requested. Refresh acceptance/completion is not returned, and it may be disabled, throttled or fail. Retry later to observe any update."
+        : "This connection serves stored rows only and does not request a refresh, so articles published after the latest stored fetch are not included."];
       if (!selected.articles.length) warnings.push("No matching usable articles were returned from the newest 50 stored rows. This is unknown news coverage, not proof that no company news exists.");
       if (freshnessStatus === "stale") warnings.push(`The newest recorded article fetch is older than ${STALE_AFTER_HOURS} hours; these cached headlines may miss recent events.`);
       if (freshnessStatus === "unknown") warnings.push("An absolute stored-fetch time is unavailable or invalid, so cache freshness is unknown. Publication dates and this retrieval time are not fetch times.");
@@ -72,7 +81,8 @@ export function registerGetCompanyNews(server: McpServer): void {
         freshness: { retrievedAt, sourceFetchedAt, storedAtMeaning: dataset?.storedAtMeaning ?? null,
           ageHours: ageHours == null || ageHours < 0 ? null : Number(ageHours.toFixed(2)),
           status: freshnessStatus, staleAfterHours: STALE_AFTER_HOURS, datasetStatus: dataset?.status ?? "unknown",
-          refresh: { behavior: "cached_read_with_best_effort_background_refresh", accepted: null, completed: null } },
+          refresh: refresh ? { behavior: "cached_read_with_best_effort_background_refresh", accepted: null, completed: null }
+            : { behavior: "stored_read_without_refresh" } },
         methodology: {
           ordering: "Newest absolute publication instant first, then article identifier/URL/headline for ties. All output timestamps are normalized to UTC.",
           dates: "since is inclusive. A date-only cutoff means 00:00:00 UTC. Invalid and timezone-free article timestamps are omitted rather than guessed.",

@@ -54,7 +54,7 @@ export function registerGetEtfHoldings(server: McpServer): void {
     "get_etf_holdings",
     {
       title: "Get ETF holdings",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Return the latest stored ETF holdings snapshot with opaque cursor pagination. The response reports the provider's stated holdings count, stored row count, covered weight, and whether the stored rows appear complete. Treat isComplete=false or null as partial look-through data. Historical as-of selection will be added when the upstream API exposes it. Read-only.",
       inputSchema,

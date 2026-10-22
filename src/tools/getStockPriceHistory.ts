@@ -21,7 +21,7 @@ const inputSchema = {
 export function registerGetStockPriceHistory(server: McpServer): void {
   server.registerTool("get_stock_price_history", {
     title: "Get stock price history and technical indicators",
-    annotations: { readOnlyHint: true, idempotentHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     description: "Read bounded stored stock OHLCV history, ascending by trade date, as daily, weekly or monthly bars, with close-based price returns/drawdown and optional deterministic SMA, EMA, Wilder RSI and MACD. Useful for price trends, volatility context and technical analysis; use get_stock_metrics for a latest company snapshot. Up to 2600 recent daily source rows; dates filter that bounded window. Provider split/dividend adjustment is unknown: returns are not verified total returns. Missing OHLCV/indicator warm-up remains null; no synthetic sessions, intraday data or live quote claims. Read-only.",
     inputSchema,
   }, async (args) => {

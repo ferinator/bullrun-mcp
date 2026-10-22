@@ -57,7 +57,7 @@ export function registerGetEtfFilterOptions(server: McpServer): void {
     "get_etf_filter_options",
     {
       title: "List ETF filter values",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "List the exact values accepted by the categorical filters on search_etfs and screen_etfs — asset classes, categories, index keys, product/wrapper types, regions, domiciles, currencies, exchanges, and (on request) issuers and focus strings. Those filters match exactly, so a guessed string returns zero rows and looks like \"no such ETF exists\"; call this first whenever a filter value is not already known to be valid. Read-only.",
       inputSchema,

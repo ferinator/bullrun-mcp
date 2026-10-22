@@ -101,7 +101,7 @@ export function registerGetMacroHistory(server: McpServer): void {
     "get_macro_history",
     {
       title: "Get macro / market history",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Historical time series behind the Global Markets dashboard, often decades long: equity indices, central-bank policy rates, 10-year government bond yields, FX rates, oil/gas/gold/copper, VIX, DXY, the US 2s10s curve, and per-country macro indicators (GDP growth, inflation, unemployment, house prices, credit gap, debt, confidence, macro stress). Address a series by historyCode (from get_global_markets_overview, get_country_macro or get_macro_indicators), by instrument name (\"Fed\", \"Brent\", \"Germany 10Y\", \"S&P 500\"), or by indicator + country. Returns summary statistics (latest, change over 1M/3M/1Y/5Y, range, where the latest sits in the window) plus resampled points. Use for \"how have rates moved since 2022\", \"plot Brent over 10 years\", \"is German unemployment rising\". Read-only.",
       inputSchema,

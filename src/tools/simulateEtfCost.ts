@@ -37,7 +37,7 @@ export function registerSimulateEtfCost(server: McpServer): void {
     "simulate_etf_cost",
     {
       title: "Simulate ETF cost",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Simulate expense-ratio, assumed bid/ask spread, commissions, and recurring contributions over a holding period. Compares the same gross-return path with and without costs and reports direct charges plus ending-value drag. Taxes, FX, market impact and brokerage-specific fees are excluded unless represented by the inputs. Read-only.",
       inputSchema,

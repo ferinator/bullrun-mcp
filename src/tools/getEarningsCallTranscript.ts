@@ -43,14 +43,23 @@ const inputSchema = {
     .describe("Maximum characters per transcript chunk in the MCP response."),
 };
 
-export function registerGetEarningsCallTranscript(server: McpServer): void {
+/**
+ * refresh: whether a read also asks the API to queue a background transcript import from DefeatBeta.
+ * Research-only sessions pass false, which makes the tool a read of Bullrun's stored paragraphs.
+ */
+export function registerGetEarningsCallTranscript(server: McpServer, { refresh = true }: { refresh?: boolean } = {}): void {
   server.registerTool(
     "get_earnings_call_transcript",
     {
       title: "Get earnings call transcript",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: !refresh, destructiveHint: false, openWorldHint: refresh },
       description:
-        "Read cached earnings-call paragraphs for one exact Bullrun ticker, optionally filtered by fiscal period or search text. A best-effort free background import collects at most the two latest retained calls from DefeatBeta for supported US listings, with a 24-hour stored-data cooldown; the first read may be empty. Coverage and source publication lag vary. Speaker names and paragraph order are retained; roles and prepared/Q&A section labels may be unavailable. This is a read-only research operation.",
+        "Read cached earnings-call paragraphs for one exact Bullrun ticker, optionally filtered by fiscal period or search text. "
+        + (refresh
+          ? "A best-effort free background import collects at most the two latest retained calls from DefeatBeta for supported US listings, with a 24-hour stored-data cooldown; the first read may be empty. "
+          : "This connection reads stored transcripts only and does not request an import; a ticker without stored calls returns no paragraphs. ")
+        + "Coverage and source publication lag vary. Speaker names and paragraph order are retained; roles and prepared/Q&A section labels may be unavailable. "
+        + (refresh ? "Does not change portfolios or user data." : "This is a read-only research operation."),
       inputSchema,
     },
     async (args) => {
@@ -68,6 +77,7 @@ export function registerGetEarningsCallTranscript(server: McpServer): void {
           fiscalQuarter: args.fiscalQuarter,
           q: args.search,
           limit: args.maxChunks,
+          refresh: refresh ? undefined : false,
         });
 
         const chunks = rows ?? [];
@@ -96,7 +106,9 @@ export function registerGetEarningsCallTranscript(server: McpServer): void {
           identity: identityPayload(identity),
           coverage: {
             chunks: chunks.length,
-            refreshPolicy: "cached read; best-effort background import of at most two retained US calls; completion is not awaited",
+            refreshPolicy: refresh
+              ? "cached read; best-effort background import of at most two retained US calls; completion is not awaited"
+              : "stored read only; this connection does not request an import",
             requestedFiscalYear: args.fiscalYear ?? null,
             requestedFiscalQuarter: args.fiscalQuarter ?? null,
             search: args.search ?? null,
@@ -104,7 +116,9 @@ export function registerGetEarningsCallTranscript(server: McpServer): void {
           },
           chunks: mapped,
           warnings: [
-            ...(chunks.length === 0 ? ["No matching transcript paragraphs are currently stored. A supported US listing may be importing in the background; other listings or older requested periods may have no source coverage. This response does not confirm refresh completion."] : []),
+            ...(chunks.length === 0 ? [refresh
+              ? "No matching transcript paragraphs are currently stored. A supported US listing may be importing in the background; other listings or older requested periods may have no source coverage. This response does not confirm refresh completion."
+              : "No matching transcript paragraphs are stored. This connection does not request an import; other listings or older requested periods may have no source coverage."] : []),
             ...(chunks.length >= args.maxChunks ? ["The paragraph limit was reached; the returned transcript may be partial. Narrow the fiscal period or search, or increase maxChunks."] : []),
             ...(truncatedChunks > 0 ? [`${truncatedChunks} transcript chunks were truncated by maxCharsPerChunk; increase it for fuller text.`] : []),
             "Speaker roles and prepared-remarks/Q&A labels are not supplied by the configured DefeatBeta feed; OTHER is an unspecified section.",

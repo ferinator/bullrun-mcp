@@ -61,7 +61,7 @@ export function registerScreenRiskBoard(server: McpServer): void {
     "screen_risk_board",
     {
       title: "Screen the risk board",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Rank Bullrun's scored stock universe (~9,000 companies) by company risk: the composite risk score or any one mechanism dial (market expectation, operating pressure, cash conversion, leverage, competitive position, concentration), filtered by band, sector, country and dial coverage. Returns ticker, score, band and its meaning, direction and move since the prior reading, and the driving input per row, plus the universe band distribution and how many companies changed band at the last recompute. Use for \"which large caps have stretched leverage\", \"most concentrated supply chains in semiconductors\", \"calmest German industrials\", or \"how risky is tech vs utilities\" (includeSlices). Drill into a row with get_company_risk. A ranking of readings, not of companies to avoid. Read-only.",
       inputSchema,

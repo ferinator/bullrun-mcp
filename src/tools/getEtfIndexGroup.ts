@@ -80,7 +80,7 @@ export function registerGetEtfIndexGroup(server: McpServer): void {
     "get_etf_index_group",
     {
       title: "Compare funds tracking one index",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Answer \"what is the cheapest way to track <index>?\". Returns every fund tracking one index ordered cheapest fee first, deduplicated to one row per FUND rather than per venue listing (a five-venue UCITS fund is one choice, not five) with its listingCount and venues. Defaults to UCITS-buyable domiciles. Omit indexKey to list the available index families. Fees are percentage points and the response states how many funds publish no fee at all, so a \"cheapest\" claim is never made over silently omitted funds. Read-only.",
       inputSchema,

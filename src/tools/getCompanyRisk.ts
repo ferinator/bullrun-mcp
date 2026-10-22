@@ -114,7 +114,7 @@ export function registerGetCompanyRisk(server: McpServer): void {
     "get_company_risk",
     {
       title: "Get company risk profile",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Bullrun's company risk read for one stock: a 0-100 composite risk score and six mechanism dials (market expectation, operating pressure, cash conversion, leverage & coverage, competitive position, concentration) with band (Contained/Normal/Elevated/Stretched/Acute), direction vs the prior reading, the driving input and a plain-English explanation; plus filing-derived risk factors (severity, mechanism, source filing), identified supplier concentration (share of cost base covered, HHI, sole-source count, top supplier share) and recent material events. Use for \"how risky is X\", \"what are the main risks for X\", \"is X's supply chain concentrated\", or before adding a stock to a portfolio. Pair with get_company_relationships for the named competitors/suppliers/customers behind the concentration dial. Bands describe measured strain, never a buy/sell view. Read-only.",
       inputSchema,

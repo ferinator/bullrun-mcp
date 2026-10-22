@@ -297,7 +297,7 @@ export function registerGetFinancialHistory(server: McpServer): void {
     "get_financial_history",
     {
       title: "Get financial history",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Fetch 1-15 years of historical financial statements for one exact Bullrun ticker. Returns annual and/or quarterly rows grouped into income statement, balance sheet, cash flow, per-share metrics, margins, source currency, and annual growth/CAGR consistency checks. Use this when evaluating multi-year revenue/net-income growth, margin trajectories, leverage, cash flow quality, or whether a stock passed a rule such as 10% revenue and net-income growth every year.",
       inputSchema,

@@ -138,10 +138,10 @@ after(async () => {
   await new Promise(resolve => upstream.close(resolve));
 });
 
-async function withClient(run) {
+async function withClient(run, feeds = undefined) {
   const server = new McpServer({ name: "prices-news-test", version: "1" });
   registerGetStockPriceHistory(server);
-  registerGetCompanyNews(server);
+  registerGetCompanyNews(server, feeds);
   const client = new Client({ name: "prices-news-client", version: "1" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   await server.connect(serverTransport);
@@ -197,8 +197,9 @@ test("news SDK call sorts publication instants, filters inclusively and disclose
   reset();
   await withClient(async client => {
     const tools = (await client.listTools()).tools;
-    assert.equal(tools.find(tool => tool.name === "get_company_news").annotations.readOnlyHint, true);
-    assert.equal(tools.find(tool => tool.name === "get_company_news").annotations.destructiveHint, false);
+    // Queuing the refresh is not read-only in the directories' terms; research sessions turn it off.
+    assert.deepEqual(tools.find(tool => tool.name === "get_company_news").annotations,
+      { readOnlyHint: false, destructiveHint: false, openWorldHint: true });
     const result = await client.callTool({ name: "get_company_news", arguments: { ticker: " aapl ", since: "2026-10-19", limit: 1 } });
     const data = result.structuredContent;
     assert.equal(result.isError, undefined);
@@ -249,6 +250,20 @@ test("unknown news identity cannot queue a refresh, invalid news cutoff fails be
       assert.ok(!JSON.stringify(failed).includes("internal-host"));
     }
   });
+});
+
+test("a research session's news read asks the API not to refresh and says so", async () => {
+  reset();
+  await withClient(async client => {
+    const news = (await client.listTools()).tools.find(tool => tool.name === "get_company_news");
+    assert.deepEqual(news.annotations, { readOnlyHint: true, destructiveHint: false, openWorldHint: true });
+    assert.match(news.description, /does not request a refresh/);
+    const result = await client.callTool({ name: "get_company_news", arguments: { ticker: "AAPL" } });
+    assert.equal(result.isError, undefined);
+    assert.equal(requests.find(url => url.pathname.endsWith("/news")).searchParams.get("refresh"), "false");
+    assert.deepEqual(result.structuredContent.freshness.refresh, { behavior: "stored_read_without_refresh" });
+    assert.doesNotMatch(result.structuredContent.warnings.join(" "), /queue a background refresh/);
+  }, { refresh: false });
 });
 
 test("both tools enforce authenticated market scope before data reads or refresh side effects", async () => {

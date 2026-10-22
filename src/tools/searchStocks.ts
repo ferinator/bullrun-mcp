@@ -46,7 +46,7 @@ function homeVenueFirst(rows: DiscoveryStock[]): DiscoveryStock[] {
 export function registerSearchStocks(server: McpServer): void {
   server.registerTool("search_stocks", {
     title: "Find stock tickers and company listings",
-    annotations: { readOnlyHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     description: "Resolve a company name, native ticker, ISIN or exchange-qualified symbol to Bullrun listings before calling exact-ticker research tools. Supports exchange/MIC, country, currency and instrument-type filters. Recognized Yahoo suffixes are checked against compatible stored venues; dots in native share-class tickers are preserved. Returns explicit ambiguous candidates and never picks a listing when alternatives remain. No enrichment or market-data refresh. Read-only.",
     inputSchema: {
       query: z.string().trim().min(1).max(120).describe("Company/name phrase, exact native ticker (AAPL, BMW, BRK.B), ISIN, EXCHANGE:TICKER, or Yahoo symbol (BMW.DE, NESN.SW)."),

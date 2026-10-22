@@ -2,6 +2,8 @@
 
 An MCP server for researching stocks and ETFs beyond the US. Find global stock candidates, compare UCITS ETF costs and overlap, and inspect company risks from your MCP client. Every figure shows its date, reporting period and native currency, and missing data is reported as unknown. **Public research needs no API key or Bullrun account.** Connect your free Bullrun account when you want to save research, read your portfolios or create a reviewable paper-portfolio draft.
 
+**Free: 700 successful MCP tool calls per rolling 30 days. Bullrun Pro: CHF 5/month or CHF 50/year for higher usage.** See [plans and subscription details](https://bull-run.org/pricing), then connect the account endpoint through OAuth to use your Pro allowance. Pro retains fair-use limits; website screening and manual research have separate free allowances.
+
 [![Bullrun MCP server](https://mcprush.com/badge/bullrun-mcp/card.svg)](https://mcprush.com/to/bullrun-mcp?ref=badge) [![Bullrun Research MCP server](https://mcprush.com/badge/bullrun-research-mcp/card.svg)](https://mcprush.com/to/bullrun-research-mcp?ref=badge)
 
 | | |
@@ -81,9 +83,9 @@ The four retired names remain available in the opt-in compatibility catalog at `
 
 Reconnect after changing endpoints; modern and compatibility sessions cannot be shared. For local compatibility, run `node dist/stdio.js --legacy-tools`. Legacy responses retain their existing fields and units, including raw fractional ratios in `query_etfs`; modern ETF ratios use percentage points.
 
-Read the returned coverage and dates. Stored prices are daily observations, not live stock quotes. Technical indicators and price returns use stored closes; an adjusted total-return series is not implied. Weekly/monthly bars are aggregated from daily data. News reads return cached articles and can request a bounded background refresh; an empty result is not proof that no news exists.
+Read the returned coverage and dates. Stored prices are daily observations, not live stock quotes. Technical indicators and price returns use stored closes; an adjusted total-return series is not implied. Weekly/monthly bars are aggregated from daily data. News reads return cached articles and, except on the research endpoint, can request a bounded background refresh; an empty result is not proof that no news exists.
 
-Consensus estimates use available Yahoo revenue/EPS targets and EPS revisions; EBITDA, management guidance and revenue revisions are not supplied by this feed. US transcript reads can queue a bounded import of the latest two calls from the existing free DefeatBeta source; the first cached response may be empty while that runs. Non-US transcript coverage is not configured. Operating KPI observations remain limited to stored rows, with no broad KPI ingestion pipeline. Use `get_company_data_coverage` before relying on an optional dataset. Missing data is unknown. A risk band describes measured strain, and a model valuation gap describes relative pricing; neither is a price target or buy/sell recommendation.
+Consensus estimates use available Yahoo revenue/EPS targets and EPS revisions; EBITDA, management guidance and revenue revisions are not supplied by this feed. Estimate reads can queue a free consensus refresh, and US transcript reads a bounded import of the latest two calls from the existing free DefeatBeta source; the first cached response may be empty while that runs. The research endpoint (`/research/mcp`) queues nothing: its news, estimate and transcript reads return stored rows only, so every tool there is read-only. Non-US transcript coverage is not configured. Operating KPI observations remain limited to stored rows, with no broad KPI ingestion pipeline. Use `get_company_data_coverage` before relying on an optional dataset. Missing data is unknown. A risk band describes measured strain, and a model valuation gap describes relative pricing; neither is a price target or buy/sell recommendation.
 
 The same UCITS fund can trade on several venues under different symbols. Resolve ISINs with `get_etf_fund` and treat those listings as one holding when evaluating overlap.
 

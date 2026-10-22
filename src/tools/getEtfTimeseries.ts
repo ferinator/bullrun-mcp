@@ -86,7 +86,7 @@ export function registerGetEtfTimeseries(server: McpServer): void {
     "get_etf_timeseries",
     {
       title: "Get ETF time series",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Fetch ETF price or price-return history at daily, weekly, or monthly intervals. NAV, true total-return, benchmark, and premium/discount series are returned only when their required source data or an explicit benchmark ticker exists; unavailable requested series are named explicitly and never approximated with price returns. Read-only.",
       inputSchema,

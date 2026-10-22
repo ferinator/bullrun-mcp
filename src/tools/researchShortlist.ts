@@ -33,7 +33,7 @@ export function registerResearchShortlist(server: McpServer): void {
   server.registerTool("list_research_shortlist", {
     title: "Read my research shortlist",
     description: "Read the signed-in user's saved Research Shortlist of stock and ETF listing tickers, with dated stored prices. Requires OAuth read:shortlist. Use after the user asks for their saved research queue. Read-only; does not evaluate a screen, schedule monitoring or send notifications.",
-    annotations: { readOnlyHint: true, idempotentHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: {},
   }, async () => {
     try {
@@ -48,7 +48,7 @@ export function registerResearchShortlist(server: McpServer): void {
   server.registerTool("save_research_shortlist", {
     title: "Save research to my shortlist",
     description: "Add 1-20 exact Bullrun stock or ETF listing tickers to the signed-in user's Research Shortlist when the user asks to save them. Requires OAuth write:shortlist; reconnect if this scope was not granted. Resolve ambiguous names with search_stocks/search_etfs first. Existing entries are retained; repeated saves are idempotent. Each ticker is saved independently and failures are reported alongside successful saves, so retry only failed tickers. Does not create a portfolio, schedule monitoring or send notifications.",
-    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true },
+    annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     inputSchema: { tickers: z.array(tickerSchema).min(1).max(20).describe("Exact listing tickers chosen by the user, e.g. AAPL or EUNL.DE.") },
   }, async ({ tickers }) => {
     try {

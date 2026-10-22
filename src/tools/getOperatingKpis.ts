@@ -53,7 +53,7 @@ export function registerGetOperatingKpis(server: McpServer): void {
     "get_operating_kpis",
     {
       title: "Get operating KPIs",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Read curated, source-linked operating KPI observations for one exact Bullrun ticker. Coverage is sparse and no automatic KPI feed is configured: do not assume ARR, retention, customer counts or payments metrics are available. Check get_company_data_coverage first. Returns stored fiscal periods, units and source links; company-economics observations are a separate dataset. Read-only.",
       inputSchema,

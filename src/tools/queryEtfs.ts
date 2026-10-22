@@ -145,7 +145,7 @@ export function registerQueryEtfs(server: McpServer): void {
     "query_etfs",
     {
       title: "Query ETFs",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Compatibility tool for older clients: search the Bullrun ETF universe and optionally bundle profile, recent prices, and latest holdings for an exact ticker. New clients should use search_etfs, get_etf_snapshot, and get_etf_holdings for smaller responses, structured output, quantitative filters, and explicit coverage metadata. Read-only.",
       inputSchema,

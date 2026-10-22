@@ -221,7 +221,7 @@ export function registerScreenStocks(server: McpServer): void {
     "screen_stocks",
     {
       title: "Screen stocks",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Screen the global Bullrun stock universe with the app rule engine using custom fundamental rules or named presets: profitable value, dividend income, growth and cash flow, cash generators, dividend growth. action=list_presets discloses exact thresholds, units, annual lookback and sorting without any backend request. action=run (default) executes one preset or custom rules; running uses the API's metered screening budget. Custom screens support sector/industry/country, listing controls, annual/quarterly lookback, AND/OR rule groups and money units. Presets are mechanical starting points, not recommendations or famous-investor strategies. Read-only.",
       inputSchema,

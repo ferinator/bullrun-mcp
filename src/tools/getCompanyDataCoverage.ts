@@ -17,7 +17,7 @@ interface Coverage {
 export function registerGetCompanyDataCoverage(server: McpServer): void {
   server.registerTool("get_company_data_coverage", {
     title: "Get company data availability and freshness",
-    annotations: { readOnlyHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     description: "A cheap stored-data manifest for one exact company: available datasets, latest reporting periods, actual ingestion/computation timestamps where stored, and cached relationship graph status. Call before deeper research when coverage or freshness is uncertain. This reads indexed metadata, not every research endpoint, and never starts enrichment. Availability is not completeness or accuracy. A null stored timestamp means freshness is unknown; a reporting period is not an ingestion date. Read-only.",
     inputSchema: { ticker: z.string().trim().min(1).max(32).describe("Bullrun company ticker, e.g. AAPL, SAP or 6324.T. " + TICKER_CONVENTION) },
   }, async ({ ticker: rawTicker }) => {

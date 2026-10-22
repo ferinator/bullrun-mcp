@@ -28,7 +28,7 @@ export function registerGetValuationModel(server: McpServer): void {
     "get_valuation_model",
     {
       title: "Get Bullrun valuation model",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Bullrun's proprietary machine-learning valuation and forecast scores for 1-10 stocks, recomputed nightly. Valuation: a LightGBM model predicts the P/E (or price/sales for loss-makers) that companies with similar fundamentals typically command a year out; the gap = typical / current multiple - 1 (positive = trades below its typical multiple), with the implied model-typical P/E, percentile and rank in the scored universe. Forecast: a relative 1-year return-rank signal with percentile. Both on quarterly and on annual financials (annual covers most non-US companies). Use for \"is X cheap or expensive\", \"what's X's fair P/E\", \"compare valuations of X, Y, Z\", or a valuation sanity check before buying. Descriptive context, not a price target or recommendation. Read-only.",
       inputSchema,

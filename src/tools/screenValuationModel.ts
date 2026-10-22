@@ -37,7 +37,7 @@ export function registerScreenValuationModel(server: McpServer): void {
     "screen_valuation_model",
     {
       title: "Screen by Bullrun valuation model",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Rank the whole scored stock universe (market cap >= $100M) by Bullrun's proprietary ML models: the stocks trading furthest below (or above) the P/E or price/sales multiple their fundamentals typically command, or the strongest/weakest relative 1-year forecast signals. Filter by sector, country, exchange and financial-history coverage. Each row has the valuation gap or forecast edge, the model-typical vs current P/E, percentile, rank and data quality. Use for \"cheapest stocks vs fundamentals in Europe\", \"most expensive tech names by the model\", \"best forecast scores in Japan\". The valuation gap is descriptive context, not a return prediction; follow up with get_stock_metrics, get_company_risk and get_quality_moat_metrics before drawing conclusions. Read-only.",
       inputSchema,

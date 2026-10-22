@@ -42,7 +42,7 @@ export function registerGetCountryMacro(server: McpServer): void {
     "get_country_macro",
     {
       title: "Get country macro profile",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "One country's macro dashboard from Bullrun's Global Markets warehouse: a 0-100 macro stress score (higher = more stress) built from six pillars - labour (unemployment, its change, youth unemployment), housing (real house prices, price-to-income and price-to-rent vs history), credit (BIS credit-to-GDP gap, household debt service, household credit), fiscal (government debt, fiscal balance), external (current account) and cycle (GDP growth, inflation) - with every input's latest value, period, source (OECD, IMF, BIS, World Bank, Eurostat), its stress contribution and a historyCode for get_macro_history. Use for \"how is the German economy doing\", \"is there a housing bubble in Canada\", \"macro risks in Italy\", or to judge the backdrop for a country's stocks. A thinly covered country returns state \"insufficient\", never a falsely calm score. Read-only.",
       inputSchema,

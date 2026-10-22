@@ -11,7 +11,7 @@ const CANDIDATE_CAP = 500;
 export function registerFindStockPeers(server: McpServer): void {
   server.registerTool("find_stock_peers", {
     title: "Discover comparable stock candidates",
-    annotations: { readOnlyHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     description: "Discover stock comparison candidates for one exact Bullrun ticker using stored industry or sector classification. Discloses the chosen classification, country preference, deterministic selection order, scan cap and issuer/listing exclusions. Excludes the subject, secondary listings and identifiable duplicate issuers/share classes. Returns compact stored multiples/growth plus ready-to-use compare_stocks arguments. Classification peers are not verified competitors or a financial-similarity ranking; no generated peers or paid graph discovery. Read-only.",
     inputSchema: {
       ticker: z.string().trim().min(1).max(80).describe("Bullrun equity ticker, e.g. AAPL, BMW or 6324.T. " + TICKER_CONVENTION),

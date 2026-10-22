@@ -9,7 +9,7 @@ export function registerListPortfolios(server: McpServer): void {
     "list_portfolios",
     {
       title: "List my portfolios",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Use when the user refers to THEIR portfolio(s) or holdings — e.g. \"my portfolios\", \"what portfolios do I have\", \"how are my investments doing\", \"show my holdings\", \"my account\". Lists the signed-in Bullrun user's virtual portfolios with computed summaries: name, base currency, total value (USD), day change, cost basis and total return, plus position counts. Start here when a portfolio question doesn't name a specific portfolio, then pass a portfolioId to get_portfolio_context or get_portfolio_analytics. Requires connecting this server to a Bullrun account (OAuth, read:portfolios scope) — it returns that user's own data only. privacyMode defaults to \"full\" (includes absolute $ amounts); pass \"weights_only\" to hide absolute money and return only relative figures (returns %, counts). Read-only.",
       inputSchema: {

@@ -14,7 +14,9 @@ const api = createServer((req, res) => {
   // An MCP allowance that ran out, as RateLimitFilter answers it, and a website quota 429 without a pool.
   if (req.url.startsWith('/api/spent/')) {
     res.statusCode = 429
-    res.end(JSON.stringify({ error: 'quota_exceeded', limit: 3500, resetAt: '2026-11-20T10:05:00Z', window: '30d', pool: 'caller' }))
+    const account = req.url.startsWith('/api/spent/account')
+    res.end(JSON.stringify({ error: 'quota_exceeded', limit: account ? 10500 : 3500,
+      resetAt: '2026-11-20T10:05:00Z', window: '30d', pool: account ? 'account' : 'caller' }))
     return
   }
   if (req.url.startsWith('/api/web429/')) {
@@ -142,6 +144,7 @@ test('a refused heavy call never runs, reports no reads, and says it was paced',
   assert.equal(ran, false)
   assert.equal(result.isError, true)
   assert.match(result.content[0].text, /6 calls per minute.*about 42 s/)
+  assert.doesNotMatch(result.content[0].text, /subscrib|pricing|account\/mcp/i)
   assert.equal(events[0].outcome, 'error')
   assert.equal(events[0].rateLimited, true)
   assert.equal(events[0].apiCalls, 0)
@@ -207,31 +210,62 @@ test('only an MCP allowance 429 is read as a run-out notice', () => {
   assert.equal(parseQuotaNotice('Please wait a minute'), undefined)
 })
 
-test('the run-out message names the window, when reads return and the next step for that caller', () => {
+test('free read allowances explain Pro subscriptions and the appropriate account handoff', () => {
   const at = '2026-11-20T10:05:00Z'
   const anonMonth = allowanceMessage({ pool: 'caller', window: '30d', limit: 3500, resetAt: at }, { signedIn: false, marketplace: false })
   assert.match(anonMonth, /this month's free Bullrun allowance/)
   assert.match(anonMonth, /3,500 data reads in 30 days/)
   assert.match(anonMonth, /from 2026-11-20 10:05 UTC/)
-  assert.ok(anonMonth.includes(`${ACCOUNT_ENDPOINT} to save your research`))
-  assert.ok(anonMonth.includes(PRICING_URL))
+  assert.ok(anonMonth.includes(`After subscribing, connect that Bullrun account at ${ACCOUNT_ENDPOINT}`))
+  assert.ok(anonMonth.includes(`Bullrun Pro subscriptions with higher MCP limits are available at ${PRICING_URL}`))
   const anonDay = allowanceMessage({ pool: 'caller', window: '24h', limit: 500, resetAt: at }, { signedIn: false, marketplace: false })
   assert.match(anonDay, /today's free Bullrun allowance .*500 data reads in 24 hours/)
-  // A free account is pointed to Pro, never back to the account endpoint it already uses.
+  // A connected free account gains Pro limits when that same account subscribes; no reconnect is required.
   const account = allowanceMessage({ pool: 'account', window: '30d', limit: 10500, resetAt: at }, { signedIn: true, marketplace: false })
   assert.match(account, /this month's allowance for your free Bullrun account \(10,500 data reads in 30 days\)/)
   assert.ok(account.includes(PRICING_URL) && !account.includes(ACCOUNT_ENDPOINT))
-  const everyone = allowanceMessage({ pool: 'anonymous_total', window: '24h', limit: 50000, resetAt: at }, { signedIn: false, marketplace: false })
-  assert.match(everyone, /across all users/)
-  assert.ok(everyone.includes(ACCOUNT_ENDPOINT))
+  assert.match(account, /Subscribe using the Bullrun account connected to this MCP session/)
+  assert.doesNotMatch(account, /After subscribing, connect|reconnect/)
+  for (const text of [anonMonth, anonDay, account]) {
+    assert.match(text, /Pro remains subject to fair-use and pacing limits/)
+    assert.match(text, /website remains available for free manual screening and research/)
+    assert.match(text, /usage allowance, not a gap in Bullrun's data/)
+    assert.doesNotMatch(text, /per minute|could not be loaded|not stored|unlimited|remove the .*caps/)
+  }
+})
+
+test('shared capacity, probes, Pro and marketplace limits do not send callers to subscribe', () => {
+  const at = '2026-11-20T10:05:00Z'
+  const shared = ['anonymous_total', 'shared'].map(pool => allowanceMessage(
+    { pool, window: '24h', limit: 50000, resetAt: at }, { signedIn: false, marketplace: false }))
+  for (const text of shared) {
+    assert.match(text, /across all users/)
+    assert.ok(text.includes(`Connect a free Bullrun account at ${ACCOUNT_ENDPOINT}`))
+    assert.match(text, /No subscription is required for that option/)
+    assert.match(text, /free manual screening and research/)
+  }
+  const probe = allowanceMessage({ pool: 'probe', window: '24h', limit: 100, resetAt: at }, { signedIn: false, marketplace: false })
+  assert.match(probe, /shared MCP health-check allowance/)
+  assert.ok(!probe.includes(ACCOUNT_ENDPOINT))
   const pro = allowanceMessage({ pool: 'pro', window: '5h', limit: 1000, resetAt: at }, { signedIn: true, marketplace: false })
   assert.match(pro, /Pro's fair-use limit \(1,000 data reads in 5 hours\)/)
   const marketplace = allowanceMessage({ pool: 'installation', window: '24h', limit: 10000, resetAt: at }, { signedIn: false, marketplace: true })
-  assert.ok(!marketplace.includes(ACCOUNT_ENDPOINT) && !marketplace.includes(PRICING_URL))
+  // Marketplace context must never redirect installation billing to Bullrun, whatever notice arrives.
+  const gatewayCaller = allowanceMessage({ pool: 'caller', window: '24h', limit: 500, resetAt: at }, { signedIn: false, marketplace: true })
+  const gatewayCalls = allowanceMessage({ pool: 'mcp_calls', window: '30d', limit: 700, resetAt: at }, { signedIn: false, marketplace: true })
+  for (const text of [marketplace, gatewayCaller, gatewayCalls]) {
+    assert.ok(!text.includes(ACCOUNT_ENDPOINT))
+    assert.match(text, /marketplace installation/)
+  }
   // Distinct from a coverage answer and from the per-minute pacing message.
-  for (const text of [anonMonth, anonDay, account, everyone, pro, marketplace]) {
+  for (const text of [...shared, probe, pro, marketplace, gatewayCaller]) {
+    assert.match(text, /from 2026-11-20 10:05 UTC/)
     assert.match(text, /usage allowance, not a gap in Bullrun's data/)
     assert.doesNotMatch(text, /per minute|could not be loaded|not stored/)
+  }
+  for (const text of [...shared, probe, pro, marketplace, gatewayCaller, gatewayCalls]) {
+    assert.ok(!text.includes(PRICING_URL))
+    assert.doesNotMatch(text, /subscrib(?:e|ing)|Pro subscriptions|upgrade|remove the .*caps/i)
   }
 })
 
@@ -243,17 +277,32 @@ test('a run-out mid-call answers with the allowance message, however the tool ha
     const failed = await bullrunGet('/api/spent/MSFT').then(() => null, err => err.message)
     return { content: [{ type: 'text', text: `MSFT could not be loaded: ${failed}` }] }
   }, reporter)
-  const throwingTool = () => recordMcpToolInvocation('screen_stocks', async () => {
-    await bullrunPost('/api/spent/screen', {})
+  const throwingTool = path => () => recordMcpToolInvocation('screen_stocks', async () => {
+    await bullrunPost(path, {})
     return { content: [] }
   }, reporter)
-  for (const run of [settledTool, throwingTool]) {
-    const result = await runWithMcpUsage({ clientIp: '203.0.113.50' }, run)
+  for (const { run, signedIn } of [
+    { run: settledTool, signedIn: false },
+    { run: throwingTool('/api/spent/screen'), signedIn: false },
+    { run: throwingTool('/api/spent/account'), signedIn: true },
+  ]) {
+    const invoke = () => runWithMcpUsage({ clientIp: '203.0.113.50' }, run)
+    const result = await (signedIn ? runWithAuth({ token: 't', userId: 7, scopes: [] }, invoke) : invoke())
     assert.equal(result.isError, true)
-    assert.match(result.content[0].text, /this month's free Bullrun allowance/)
+    const text = result.content[0].text
+    assert.match(text, signedIn ? /allowance for your free Bullrun account/ : /this month's free Bullrun allowance/)
+    assert.ok(text.includes(PRICING_URL))
+    if (signedIn) {
+      assert.match(text, /Subscribe using the Bullrun account connected to this MCP session/)
+      assert.ok(!text.includes(ACCOUNT_ENDPOINT))
+    } else {
+      assert.ok(text.includes(ACCOUNT_ENDPOINT))
+      assert.match(text, /After subscribing, connect that Bullrun account/)
+    }
     assert.equal(result.content.length, 1)
   }
-  assert.deepEqual(events.map(e => [e.outcome, e.quotaExhausted]), [['error', 'caller:30d'], ['error', 'caller:30d']])
+  assert.deepEqual(events.map(e => [e.outcome, e.quotaExhausted]),
+    [['error', 'caller:30d'], ['error', 'caller:30d'], ['error', 'account:30d']])
   assert.equal(events[0].meteredReads, 1)
 })
 
@@ -266,5 +315,6 @@ test("a website-quota or proxy 429 keeps the tool's own answer", async () => {
     }, async event => { events.push(event) }))
   assert.equal(result.isError, undefined)
   assert.match(result.content[0].text, /could not be loaded: bullrun-api 429/)
+  assert.doesNotMatch(result.content[0].text, /subscrib|pricing|account\/mcp/i)
   assert.equal(events[0].quotaExhausted, undefined)
 })

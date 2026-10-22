@@ -62,7 +62,7 @@ export function registerGetGlobalMarketsOverview(server: McpServer): void {
     "get_global_markets_overview",
     {
       title: "Get global markets overview",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Bullrun's Global Markets dashboard in one call: world equity indices (S&P 500, Nasdaq-100, MSCI World, DAX, FTSE 100, Nikkei, Hang Seng, Nifty...), central-bank policy rates and next rate decisions (Fed, ECB, BoE, BoJ, SNB, BoC), 16 sovereign 10-year yields, 20 FX pairs, oil/gas/gold/copper, headline macro tiles (global GDP growth, inflation, debt/GDP, VIX, DXY, 2s10s curve, US jobless claims), the upcoming economic calendar, market news and the US housing balance. Each row carries a historyCode for get_macro_history. Use for \"how are markets doing today\", \"what's the macro backdrop\", \"where are rates/yields\", \"what's on the calendar this week\" or a morning briefing. Daily closes, with live intraday index levels while markets are open. Read-only.",
       inputSchema,

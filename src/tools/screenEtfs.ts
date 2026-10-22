@@ -271,7 +271,7 @@ export function registerScreenEtfs(server: McpServer): void {
     "screen_etfs",
     {
       title: "Screen ETFs",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Screen the WHOLE ETF universe by numeric rules and fund attributes in one pass — expense ratio, AUM, yield, trailing returns, volatility, liquidity, top-10 concentration, fund age and holdings count — combined with issuer, index, domicile, UCITS status, distribution policy, currency hedging and constituent look-through (holdingSearch finds funds by what they hold). Prefer this over search_etfs for any \"cheapest / largest / best performing / most liquid\" question: search_etfs only filters a bounded candidate scan, while this evaluates the full universe and reports evaluatedCount and matchCount. Percentages are percentage points. This full-universe screen is an expensive read, and request limits depend on your connection and plan. Build one precise screen to conserve your allowance. Read-only.",
       inputSchema,

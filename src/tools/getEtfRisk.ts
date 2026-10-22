@@ -36,7 +36,7 @@ export function registerGetEtfRisk(server: McpServer): void {
     "get_etf_risk",
     {
       title: "Get ETF risk",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Calculate drawdown, annualized volatility, downside volatility, historical VaR, Sharpe, Sortino and Calmar ratios from stored daily close prices. With benchmarkTicker, also calculates beta, correlation, tracking error, active return and information ratio on aligned dates. Results are price-return risk, not distribution-adjusted total-return risk. Read-only.",
       inputSchema,

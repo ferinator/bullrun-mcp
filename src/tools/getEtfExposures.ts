@@ -138,7 +138,7 @@ export function registerGetEtfExposures(server: McpServer): void {
     "get_etf_exposures",
     {
       title: "Get ETF exposures",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Calculate sector, country, currency, and broad asset exposure from the latest stored ETF holdings. Sector and country come from the fund provider's own holdings file where it states them (normalized to Bullrun's sector and country names), otherwise from the Bullrun instrument the holding resolves to by ISIN or by symbol with a matching company name. Currency uses the reported holding currency, else an explicitly disclosed estimate from the company's home-market listing or usual country currency. This is a holding quote/listing-currency proxy, not revenue FX exposure, economic currency risk or hedge-adjusted fund exposure. Positions without a classification or currency basis are Unclassified / Not reported. Sector and currency cover all stored rows; country covers securities and excludes cash and derivatives. Coverage states complete bucket weights and any buckets omitted by limitPerType. Broad asset class comes from the normalized fund profile. Factor and thematic look-through are unavailable until dedicated source data exists. Coverage states how much fund weight was classified and how, so partial top-holdings data is never presented as full exposure. Read-only.",
       inputSchema,

@@ -291,7 +291,7 @@ export function registerGetQualityMoatMetrics(server: McpServer): void {
     "get_quality_moat_metrics",
     {
       title: "Get quality and moat metrics",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Compute annual quality, moat, earnings-quality, and capital-allocation metrics for one exact Bullrun ticker from existing financial statements: ROIC, ROE/ROA, ROIC-vs-supplied-WACC, accruals, cash conversion, capex intensity, dividend payout/growth, diluted share-count changes, and a buyback proxy. Read-only.",
       inputSchema,

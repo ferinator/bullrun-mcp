@@ -105,7 +105,7 @@ export function registerGetEtfFund(server: McpServer): void {
     "get_etf_fund",
     {
       title: "Get ETF fund by ISIN",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Resolve one FUND rather than one listing. Given an ISIN (or any venue ticker of the fund) it returns the fund's identity, costs, index, distribution policy, wrapper type and every venue it is listed on with exchange and trading currency. Use this when the user quotes an ISIN, asks \"which ticker do I buy on my exchange?\", or when several tickers may be the same underlying fund. Ratios are percentage points. Read-only.",
       inputSchema,

@@ -48,6 +48,36 @@ test("release metadata, directory stdio and hosted factory expose the same catal
   }
 });
 
+test("every tool in every catalog states all three annotation hints as booleans", async () => {
+  // The ChatGPT directory scan requires readOnlyHint, destructiveHint and openWorldHint on every tool.
+  const REFRESHING = ["get_company_news", "get_forward_estimates", "get_earnings_call_transcript"];
+  const WRITERS = ["save_research_shortlist", "create_portfolio_draft", "create_position_draft", "create_portfolio_from_positions"];
+  for (const options of [{}, { legacyTools: true }, { researchOnly: true }, { researchOnly: true, legacyTools: true }, { marketplace: true }]) {
+    const server = createMcpServer(options);
+    const client = new Client({ name: "annotation-check", version: "1.0.0" });
+    const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
+    try {
+      await server.connect(serverSide);
+      await client.connect(clientSide);
+      const label = JSON.stringify(options);
+      const research = options.researchOnly || options.marketplace;
+      for (const { name, annotations } of (await client.listTools()).tools) {
+        for (const hint of ["readOnlyHint", "destructiveHint", "openWorldHint"]) {
+          assert.equal(typeof annotations?.[hint], "boolean", `${label} ${name} ${hint}`);
+        }
+        assert.equal(annotations.destructiveHint, false, `${label} ${name} destructiveHint`);
+        // A research catalog queues nothing, so every tool in it is strictly read-only.
+        const writes = WRITERS.includes(name) || (!research && REFRESHING.includes(name));
+        assert.equal(annotations.readOnlyHint, !writes, `${label} ${name} readOnlyHint`);
+        const openWorld = name === "get_company_news" || (!research && REFRESHING.includes(name));
+        assert.equal(annotations.openWorldHint, openWorld, `${label} ${name} openWorldHint`);
+      }
+    } finally {
+      await Promise.allSettled([client.close(), server.close()]);
+    }
+  }
+});
+
 test("legacy aliases are opt-in and research catalogs keep personal tools excluded", async () => {
   for (const [options, expectedCount] of [
     [{ legacyTools: true }, 52],

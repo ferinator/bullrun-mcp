@@ -98,7 +98,7 @@ function event(row: CalendarRow, type: CalendarType): Record<string, unknown> | 
 export function registerGetCorporateCalendar(server: McpServer): void {
   server.registerTool("get_corporate_calendar", {
     title: "Get corporate calendar",
-    annotations: { readOnlyHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     description: "Read stored upcoming earnings and ex-dividend dates, plus recent equity listings. Supports ticker/company search and explicit effective windows, market-cap filters, native listing quote currencies, available source metadata and partial coverage. Recent first-trade dates are not confirmed IPOs or an upcoming IPO schedule. Calendar dates and estimates can change; missing events mean unknown coverage, never proof that no event exists. Read-only; at most three calendar requests, plus a ticker lookup when q carries a Yahoo exchange suffix.",
     inputSchema,
     outputSchema: {

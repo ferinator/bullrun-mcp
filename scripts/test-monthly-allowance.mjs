@@ -9,6 +9,7 @@ const { recordMcpToolInvocation } = await import('../dist/usage/invocations.js')
 const { runWithMcpUsage } = await import('../dist/usage/context.js')
 const { runWithAuth } = await import('../dist/auth/context.js')
 const { runWithGateway } = await import('../dist/gateway/context.js')
+const { ACCOUNT_ENDPOINT, PRICING_URL } = await import('../dist/usage/allowance.js')
 
 const originalFetch = globalThis.fetch
 let calls = []
@@ -67,15 +68,34 @@ test('tool errors and thrown exceptions release their reservation', async () => 
   assert.equal(calls.at(-1).body.success, false)
 })
 
-test('the 701st call is refused before the tool starts and reports the correct unit', async () => {
-  mode = 'spent'
-  let ran = false
-  const result = await invoke(async () => { ran = true; return { content: [] } })
-  assert.equal(ran, false)
-  assert.equal(result.isError, true)
-  assert.match(result.content[0].text, /700 successful tool calls per rolling 30 days/)
-  assert.equal(calls.length, 1)
-})
+for (const signedIn of [false, true]) {
+  test(`the 701st ${signedIn ? 'account' : 'anonymous'} call explains Pro and its account connection before any research runs`, async () => {
+    mode = 'spent'
+    let ran = false
+    const run = () => invoke(async () => { ran = true; return { content: [] } })
+    const result = await (signedIn ? runWithAuth({ token: 'test-bearer', userId: 42, scopes: ['read:market'] }, run) : run())
+    assert.equal(ran, false)
+    assert.equal(result.isError, true)
+    const text = result.content[0].text
+    assert.match(text, /700 successful tool calls per rolling 30 days/)
+    assert.match(text, signedIn ? /This Bullrun account/ : /This network/)
+    assert.match(text, /from 2026-11-20 12:00 UTC, as earlier calls age out/)
+    assert.match(text, /Failed calls do not count toward this allowance/)
+    assert.ok(text.includes(`Bullrun Pro subscriptions with higher MCP limits are available at ${PRICING_URL}`))
+    assert.match(text, /Pro remains subject to fair-use and pacing limits/)
+    assert.match(text, /website remains available for free manual screening and research/)
+    if (signedIn) {
+      assert.match(text, /Subscribe using the Bullrun account connected to this MCP session/)
+      assert.ok(!text.includes(ACCOUNT_ENDPOINT))
+      assert.doesNotMatch(text, /After subscribing, connect|reconnect/)
+      assert.equal(calls[0].headers.authorization, 'Bearer test-bearer')
+    } else {
+      assert.ok(text.includes(`After subscribing, connect that Bullrun account at ${ACCOUNT_ENDPOINT} to use Pro limits`))
+    }
+    assert.doesNotMatch(text, /data reads|unlimited|remove the .*caps/)
+    assert.equal(calls.length, 1)
+  })
+}
 
 test('an unavailable quota service fails closed before executing research', async () => {
   mode = 'down'
@@ -84,6 +104,7 @@ test('an unavailable quota service fails closed before executing research', asyn
   assert.equal(ran, false)
   assert.equal(result.isError, true)
   assert.match(result.content[0].text, /could not confirm/)
+  assert.doesNotMatch(result.content[0].text, /subscrib|pricing|account\/mcp/i)
 })
 
 test('settlement retries the same operation and account identity is authenticated separately', async () => {

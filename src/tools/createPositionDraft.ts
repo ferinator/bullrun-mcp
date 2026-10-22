@@ -54,7 +54,7 @@ export function registerCreatePositionDraft(server: McpServer): void {
     "create_position_draft",
     {
       title: "Create a position draft",
-      annotations: { readOnlyHint: false, destructiveHint: false },
+      annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: false },
       description:
         "Use when the user asks what to BUY or ADD to an EXISTING portfolio — e.g. \"what should I buy next\", \"suggest a stock or ETF for my portfolio\", \"what should I add\", \"recommend a position\", \"any ideas to round out my holdings\". Generates REVIEWABLE suggested additions for one existing Bullrun portfolio. Requires OAuth with the write:drafts scope. Available to signed-in free accounts; daily usage limits and portfolio capacity still apply. This is DRAFT-ONLY: the suggested position(s) are saved to the user's account and appear in the Bullrun Portfolio tab under Pending AI drafts, where the user reviews and accepts them into the target portfolio or discards them. It never changes live holdings by itself. To draft a whole new portfolio from scratch use create_portfolio_draft; to test whether a specific named ticker fits, use get_portfolio_analytics with candidateTicker. Pass instrumentUniverse for stocks only, ETFs only, or a mix. If it is unclear, first confirm which portfolio (use list_portfolios when the user has more than one) and how many ideas (a single best idea or a few) in ONE quick step; otherwise just build.",
       inputSchema: {

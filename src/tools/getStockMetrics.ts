@@ -79,7 +79,7 @@ export function registerGetStockMetrics(server: McpServer): void {
     "get_stock_metrics",
     {
       title: "Get stock metrics",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Fetch a consolidated metrics snapshot for a single stock by ticker: identity (company, exchange, currency, sector, industry, country, ISIN), latest daily price (OHLCV), latest valuation (market cap, P/E, dividend yield, annual dividend per share), the most recent reported financials (revenue, gross/operating income, EBITDA, net income, diluted EPS, free & operating cash flow, total debt, cash, total assets, equity) and a short company description. Prices are in the listing's trading currency; financials in their own sourceCurrency. " + TICKER_CONVENTION + " Read-only.",
       inputSchema: {

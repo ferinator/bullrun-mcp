@@ -22,7 +22,7 @@ export function registerGetCapabilities(server: McpServer): void {
     "get_capabilities",
     {
       title: "Get account capabilities",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Discover what the connected Bullrun account can do BEFORE attempting an action, so you can plan instead of learning by hitting a 403. Reports whether you are authenticated and as WHICH identity (email + userId), the account's Pro/trial status and why (subscription / trial / admin), the granted OAuth scopes, portfolio usage vs the free/max limits, and a per-tool entitlement map: create_portfolio_from_positions, create_portfolio_draft and create_position_draft (all available to signed-in free accounts, subject to usage limits), and whether another portfolio can be created now. Call this first when a draft/write tool might be gated, or to confirm which account a request will act on. Read-only.",
       inputSchema: {},

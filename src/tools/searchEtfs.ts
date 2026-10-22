@@ -84,7 +84,7 @@ export function registerSearchEtfs(server: McpServer): void {
     "search_etfs",
     {
       title: "Search ETFs",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Look up ETFs by name, ticker or ISIN, with classification, listing, index, distribution-policy, AUM, expense-ratio and yield filters. Best for finding a known fund. For ranking questions (\"cheapest\", \"largest\", \"best performing\", \"most liquid\") prefer screen_etfs, which evaluates the whole universe: here minAum and minYieldTtmPct are applied only to a bounded profile-enriched candidate scan, so do not describe the result as exhaustive when candidateCapReached is true. Use get_etf_snapshot for one listing, get_etf_fund to resolve an ISIN across venues, and get_etf_holdings for constituents. Read-only.",
       inputSchema,

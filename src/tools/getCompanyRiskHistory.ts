@@ -14,7 +14,7 @@ const MAX_RESPONSE_BYTES = 200 * 1024;
 export function registerGetCompanyRiskHistory(server: McpServer): void {
   server.registerTool("get_company_risk_history", {
     title: "Get company risk history and changes",
-    annotations: { readOnlyHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     description: "Stored historical company risk category readings and their observed input changes. Shows dates, computation times, formula versions, score changes, changing input coverage and measurement bases. Use for 'how has X's risk changed?' and 'which inputs changed?'. These are retained category scores, not a complete daily series or proof of causation. Missing history is unknown, never a zero risk score. Read-only; does not run risk computation or paid discovery.",
     inputSchema: {
       ticker: z.string().trim().min(1).max(32).describe("Bullrun company ticker, e.g. AAPL, SAP or 6324.T. " + TICKER_CONVENTION),

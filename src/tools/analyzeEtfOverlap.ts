@@ -25,7 +25,7 @@ export function registerAnalyzeEtfOverlap(server: McpServer): void {
     "analyze_etf_overlap",
     {
       title: "Analyze ETF overlap",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Compare two to ten ETFs using their latest stored holdings. Returns pairwise shared holdings, weighted overlap (sum of the smaller weight for each shared holding), each fund's weight in shared names, and the largest duplicate exposures. Holdings are matched as securities, not symbols: same ISIN first, then the same symbol only where the names agree and the countries do not conflict, then the same company name within one country; each shared row says which (matchedOn). Cash, currency and derivative lines are never counted as shared. Coverage is explicit because provider holdings may be partial top-holdings samples. Read-only.",
       inputSchema,

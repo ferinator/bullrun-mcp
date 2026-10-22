@@ -130,7 +130,7 @@ function sharedGroups(groups: Relationship[][], included?: Set<string>) {
 export function registerCompareCompanyExposures(server: McpServer): void {
   server.registerTool("compare_company_exposures", {
     title: "Compare shared company exposures",
-    annotations: { readOnlyHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     description: "Compare the cached company relationship graphs of two to five stock tickers. Finds shared suppliers, customers, competitors and partners, including cross-role overlaps, using stable company entity IDs or exact tickers only. Returns directed direct relationships with VERIFIED vs SUGGESTED/NEEDS_REVIEW status, confidence, sole-source flags, disclosed metrics with meaning/unit/period, and primary-source URLs/dates. Shared groups reference the evidence-bearing relationship rows by ID. Missing graphs or edges mean unknown coverage. One cached graph read per company (plus a ticker lookup when the typed ticker has no graph); never starts paid discovery, infers exposure weights or estimates portfolio losses. Read-only.",
     inputSchema,
     outputSchema: {

@@ -62,7 +62,7 @@ export function registerGetRevenueBreakdown(server: McpServer): void {
     "get_revenue_breakdown",
     {
       title: "Get revenue breakdown",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Fetch segment, geography, product, customer, or other revenue breakdown rows for one exact Bullrun ticker. Use this to separate cyclical businesses from recurring segments or inspect geographic exposure instead of relying on blended revenue. Read-only.",
       inputSchema,

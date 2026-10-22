@@ -9,7 +9,7 @@ import { calculatePortfolioLookThroughFit, EXACT_FIT_TICKER, type PortfolioRiskP
 export function registerAnalyzePortfolioFit(server: McpServer): void {
   server.registerTool("analyze_portfolio_fit", {
     title: "Analyze portfolio fit (legacy)",
-    annotations: { readOnlyHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     description: "Legacy candidate-fit compatibility tool. Prefer get_portfolio_analytics with candidateTicker and includeLookThrough=true. Combines price-history candidate fit with stored ETF constituents and direct holdings; coverage denominators remain separate and partial snapshots make duplicates a lower bound. Requires OAuth read:portfolios. Read-only.",
     inputSchema: {
       portfolioId: z.number().int().positive().describe("Portfolio id returned by list_portfolios."),

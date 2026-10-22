@@ -64,7 +64,7 @@ export function registerGetEtfSnapshot(server: McpServer): void {
     "get_etf_snapshot",
     {
       title: "Get ETF snapshot",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Fetch a modular snapshot for one exact ETF listing. The include array controls which of identity, classification, market, fund_data (NAV/AUM), costs, income, and benchmark are fetched and returned. Unrequested modules are omitted; requested-but-unavailable modules are named explicitly. Ratios use percentage points. Read-only.",
       inputSchema,

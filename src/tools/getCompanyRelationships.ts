@@ -93,7 +93,7 @@ export function registerGetCompanyRelationships(server: McpServer): void {
     "get_company_relationships",
     {
       title: "Get company relationship network",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Bullrun's company relationship graph for one stock: named competitors, suppliers, customers and partners, each with its Bullrun ticker when the counterparty is listed, verification status (VERIFIED against a primary filing/source vs search-SUGGESTED), confidence, sole-source flag, quantified dependence where disclosed (e.g. \"Cirrus Logic gets 91% of revenue from Apple\") and the evidence behind it. Use for supply-chain and second-order risk questions (\"who supplies X\", \"who depends on X\", \"who competes with X\", \"which listed companies are exposed if X stumbles\"), then call get_company_risk or get_stock_metrics on the counterparties' tickers. Returns only the cached graph and never starts a paid discovery run; a company with no graph yet reports status \"none\". A missing edge is not proof of no relationship. Read-only.",
       inputSchema,

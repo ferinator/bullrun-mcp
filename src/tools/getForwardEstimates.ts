@@ -107,14 +107,23 @@ const inputSchema = {
     .describe("Maximum estimate rows to return."),
 };
 
-export function registerGetForwardEstimates(server: McpServer): void {
+/**
+ * refresh: whether a read also asks the API to queue a background consensus refresh from Yahoo.
+ * Research-only sessions pass false, which makes the tool a read of Bullrun's stored snapshots.
+ */
+export function registerGetForwardEstimates(server: McpServer, { refresh = true }: { refresh?: boolean } = {}): void {
   server.registerTool(
     "get_forward_estimates",
     {
       title: "Get forward estimates",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: !refresh, destructiveHint: false, openWorldHint: refresh },
       description:
-        "Read cached Yahoo analyst consensus revenue/EPS estimates and available EPS revision percentages for one exact Bullrun ticker. A free background refresh checks supported symbols on demand, storing at most one snapshot per day; the first read may be empty. Fiscal periods and source currency are preserved. The configured feed does not provide EBITDA estimates, management guidance or revenue revisions. Forward P/E/PEG context uses the latest annual consensus snapshot only when quote and EPS currency units match. Read-only research operation.",
+        "Read cached Yahoo analyst consensus revenue/EPS estimates and available EPS revision percentages for one exact Bullrun ticker. "
+        + (refresh
+          ? "A free background refresh checks supported symbols on demand, storing at most one snapshot per day; the first read may be empty. "
+          : "This connection reads stored snapshots only and does not request a refresh; a ticker without a stored snapshot returns no rows. ")
+        + "Fiscal periods and source currency are preserved. The configured feed does not provide EBITDA estimates, management guidance or revenue revisions. Forward P/E/PEG context uses the latest annual consensus snapshot only when quote and EPS currency units match. "
+        + (refresh ? "Does not change portfolios or user data." : "Read-only research operation."),
       inputSchema,
     },
     async (args) => {
@@ -132,6 +141,7 @@ export function registerGetForwardEstimates(server: McpServer): void {
           bullrunGet<ForwardEstimate[]>(`/api/company-intelligence/${enc}/forward-estimates`, {
             periodType,
             limit: args.limit,
+            refresh: refresh ? undefined : false,
           }),
           settle(bullrunGet<Price[]>(`/api/prices/${enc}`, { limit: 1 })),
         ]);
@@ -144,7 +154,9 @@ export function registerGetForwardEstimates(server: McpServer): void {
           identity: identityPayload(identity),
           coverage: {
             rows: estimates.length,
-            refreshPolicy: "cached read; best-effort free background refresh, with daily stored snapshot cooldown; completion is not awaited",
+            refreshPolicy: refresh
+              ? "cached read; best-effort free background refresh, with daily stored snapshot cooldown; completion is not awaited"
+              : "stored read only; this connection does not request a refresh",
             requestedPeriodType: args.periodType,
             hasConsensus: estimates.some((row) => row.revenueAvg != null || row.epsAvg != null),
             hasGuidance: estimates.some((row) =>
@@ -163,7 +175,9 @@ export function registerGetForwardEstimates(server: McpServer): void {
           derived: derivedValuation(estimates, latestClose, identity?.currency ?? null),
           estimates: estimates.map((row) => ({ ...row, period: periodLabel(row) })),
           warnings: [
-            ...(estimates.length === 0 ? ["No consensus rows are currently stored for this ticker/filter. A free refresh may be running in the background, or Yahoo may have no coverage; this response does not confirm completion."] : []),
+            ...(estimates.length === 0 ? [refresh
+              ? "No consensus rows are currently stored for this ticker/filter. A free refresh may be running in the background, or Yahoo may have no coverage; this response does not confirm completion."
+              : "No consensus rows are stored for this ticker/filter. This connection does not request a refresh, and Yahoo may have no coverage; missing estimates are unknown, not zero."] : []),
             ...(prices.failure ? [`${failureText("The latest price", prices.failure)} Forward P/E and PEG are null for that reason only.`] : []),
             "Yahoo consensus is an aggregated analyst estimate, not issuer guidance or a verified forecast. Missing values are unavailable; EBITDA, management guidance and revenue revisions are not populated by this feed.",
           ],

@@ -114,13 +114,16 @@ export function createMcpServer(requested: McpServerOptions = {}): McpServer {
   instrumentMcpTools(server);
   if (options.marketplace) boundMarketplaceResults(server);
   addPlatformLinks(server);
+  // Research-only catalogs stay strictly read-only: their news, estimates and transcript reads
+  // do not queue the background refresh that full sessions trigger.
+  const feeds = { refresh: !options.researchOnly };
 
   registerScreenStocks(server);
   registerSearchStocks(server);
   if (options.legacyTools) registerScreenStockPresets(server);
   registerFindStockPeers(server);
   registerGetStockPriceHistory(server);
-  registerGetCompanyNews(server);
+  registerGetCompanyNews(server, feeds);
   registerSearchEtfs(server);
   registerScreenEtfs(server);
   registerGetEtfIndexGroup(server);
@@ -140,10 +143,10 @@ export function createMcpServer(requested: McpServerOptions = {}): McpServer {
   registerCompareStocks(server);
   registerGetFinancialHistory(server);
   registerGetQualityMoatMetrics(server);
-  registerGetForwardEstimates(server);
+  registerGetForwardEstimates(server, feeds);
   registerGetOperatingKpis(server);
   registerGetRevenueBreakdown(server);
-  registerGetEarningsCallTranscript(server);
+  registerGetEarningsCallTranscript(server, feeds);
   if (!options.researchOnly) {
     registerResearchShortlist(server);
     registerListPortfolios(server);

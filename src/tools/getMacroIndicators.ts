@@ -26,7 +26,7 @@ export function registerGetMacroIndicators(server: McpServer): void {
     "get_macro_indicators",
     {
       title: "Rank countries by macro indicator",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Cross-country macro comparison from Bullrun's Global Markets warehouse: rank up to ~200 countries on one indicator (GDP growth annual or quarterly, CPI inflation, government debt/GDP, unemployment, youth unemployment, real house-price growth, house price-to-income and price-to-rent vs history, BIS credit-to-GDP gap, household debt service, household credit/GDP, business and consumer confidence, or Bullrun's macro stress score), or compare a named set of countries. Every row has value, period, source and a historyCode for get_macro_history. Use for \"fastest growing economies\", \"highest inflation in Europe\", \"most indebted G7 government\", \"where is housing most overvalued\", \"compare unemployment in Spain, Italy and Greece\". Read-only.",
       inputSchema,

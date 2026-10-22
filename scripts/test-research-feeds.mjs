@@ -9,8 +9,11 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 let estimates = [];
 let fail = false;
 let quoteCurrency = "USD";
+let requests = [];
 const api = http.createServer((req, res) => {
-  const path = new URL(req.url, "http://localhost").pathname;
+  const url = new URL(req.url, "http://localhost");
+  requests.push(url);
+  const path = url.pathname;
   if (path === "/api/stocks/AAPL") {
     res.setHeader("Content-Type", "application/json");
     return res.end(JSON.stringify({ ticker: "AAPL", company: "Apple", currency: quoteCurrency, quoteType: "EQUITY" }));
@@ -33,11 +36,11 @@ const row = (year, eps, asOfDate = "2026-10-19", sourceCurrency = "USD") => ({
   source: "yfinance", sourceCurrency, epsAvg: eps, revenueAvg: 1000,
 });
 
-async function call(name) {
+async function call(name, feeds = undefined) {
   const server = new McpServer({ name: "research-feed-test", version: "1" });
-  registerGetForwardEstimates(server);
+  registerGetForwardEstimates(server, feeds);
   registerGetOperatingKpis(server);
-  registerGetEarningsCallTranscript(server);
+  registerGetEarningsCallTranscript(server, feeds);
   const client = new Client({ name: "research-feed-test", version: "1" });
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   try {
@@ -80,6 +83,21 @@ test("empty optional feeds distinguish curated coverage from pending imports", a
   assert.equal(transcript.coverage.chunks, 0);
   assert.match(transcript.warnings.join(" "), /background/);
   assert.match(transcript.warnings.join(" "), /roles.*not supplied/i);
+});
+
+test("research sessions read stored rows and ask the API not to queue a refresh", async () => {
+  estimates = [];
+  for (const [name, path] of [["get_forward_estimates", "/forward-estimates"], ["get_earnings_call_transcript", "/earnings-call-transcripts"]]) {
+    requests = [];
+    const stored = await call(name, { refresh: false });
+    assert.equal(requests.find(url => url.pathname.endsWith(path)).searchParams.get("refresh"), "false");
+    assert.match(stored.coverage.refreshPolicy, /stored read only/);
+    assert.doesNotMatch(stored.warnings.join(" "), /background/);
+    requests = [];
+    const full = await call(name);
+    assert.equal(requests.find(url => url.pathname.endsWith(path)).searchParams.has("refresh"), false);
+    assert.match(full.coverage.refreshPolicy, /not awaited/);
+  }
 });
 
 test("upstream failures remain errors without exposing diagnostic bodies or internal URLs", async () => {

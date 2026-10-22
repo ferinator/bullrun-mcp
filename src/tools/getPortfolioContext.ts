@@ -40,7 +40,7 @@ export function registerGetPortfolioContext(server: McpServer): void {
     "get_portfolio_context",
     {
       title: "Get portfolio context",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Use when the user asks to look at, review, or analyze THEIR portfolio / holdings / positions — e.g. \"analyze my portfolio\", \"how is my portfolio doing\", \"what's in my portfolio\", \"review my holdings\", \"how am I invested\", \"what should I improve\". Fetches a deep snapshot of ONE of the signed-in user's portfolios: the summary (value, day change, total return), every holding (with position weight %, sector and return) and Bullrun's computed insights (benchmark comparison, concentration, diversification, dividend income). Pass a portfolioId from list_portfolios (call that first if the user hasn't named a portfolio). The response ALWAYS returns the complete holdings list with each position flagged matched/unmatched, plus a `coverage` summary: holdings that Bullrun can't link to its universe (ETFs, funds, untracked tickers) carry no weight, sector, insight or ML score, so weights/insights/ML below describe ONLY the matched subset. Read the coverage banner (the first text block) and never present matched-only figures as the whole portfolio. For risk/diversification math, correlations, factor exposure, or whether to add a specific stock, use get_portfolio_analytics instead. Requires OAuth (read:portfolios) and returns the caller's own data only. privacyMode defaults to \"full\" (absolute $ included); \"weights_only\" returns only relative figures. Read-only.",
       inputSchema: {

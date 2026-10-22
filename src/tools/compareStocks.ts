@@ -163,7 +163,7 @@ function summarizeRisk(cluster: RiskDialCluster | null, ticker: string) {
 export function registerCompareStocks(server: McpServer): void {
   server.registerTool("compare_stocks", {
     title: "Compare stocks",
-    annotations: { readOnlyHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     description: "Compare two to five stock tickers in one compact structured response: annual fundamentals and growth, quality ratios, stored valuation and Bullrun model context, and measured risk dials. Reports each fiscal year, source date, native quote/reporting currency and missing coverage. No currency conversion, quarterly-to-annual substitution, buy/sell ranking or generated research. Read-only.",
     inputSchema,
     outputSchema: {

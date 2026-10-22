@@ -64,7 +64,7 @@ export function registerCompareEtfs(server: McpServer): void {
     "compare_etfs",
     {
       title: "Compare ETFs",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Return a normalized side-by-side comparison of two to ten ETFs across selected classification, market, fund-data, cost, income, benchmark, price-performance, price-risk, holdings, and optional overlap modules. Include overlap to measure pairwise shared securities and weighted overlap from latest stored holdings, matched by security identity rather than ticker alone; cash, currency and derivatives are excluded. Missing holdings make overlap unavailable, while partial holdings make it a lower bound. Only requested modules run; overlap alone fetches no price history. Leaders are mechanical extrema, not recommendations. Currency, holdings dates and coverage caveats are explicit. Read-only.",
       inputSchema,

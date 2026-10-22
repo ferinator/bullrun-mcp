@@ -4,7 +4,7 @@
     "ferinator"
   ],
   "name": "Bullrun: Global Stock & UCITS ETF Research",
-  "description": "Global stock and UCITS ETF research without an API key: company search by name, ticker or ISIN, stock and ETF screens, financial history, daily prices and technicals, dated company news, ETF costs, holdings and overlap, company risk and relationships, and global macro. Every figure carries its date and currency. Connect a free Bullrun account to save research and review portfolios.",
+  "description": "Global stock and UCITS ETF research. Free: 700 successful MCP tool calls per rolling 30 days. Pro: CHF 5/month or CHF 50/year for higher usage. Screen stocks, compare fund costs and holdings, and inspect company risks. No account or API key for public research. Plans: https://bull-run.org/pricing. Connect your Bullrun account through OAuth to use Pro.",
   "type": "mcp_server",
   "status": "beta",
   "transport": [

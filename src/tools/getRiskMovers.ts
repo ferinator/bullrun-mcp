@@ -25,7 +25,7 @@ export function registerGetRiskMovers(server: McpServer): void {
     "get_risk_movers",
     {
       title: "Get risk movers",
-      annotations: { readOnlyHint: true },
+      annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
         "Companies whose Bullrun composite risk score crossed into a different band (e.g. Elevated -> Stretched, or Acute -> Stretched) within the last N days, with prior and current score, the move in points, and the input driving the reading. Use for \"what got riskier this week\", \"any risk deteriorations I should know about\", or to monitor a watchlist (pass the tickers to get_company_risk afterwards). Band changes, not small score drift, so every row changed a word on the page. Read-only.",
       inputSchema,

@@ -115,7 +115,7 @@ export async function runStockScreenPreset(args: PresetScreenArgs) {
 export function registerScreenStockPresets(server: McpServer): void {
   server.registerTool("screen_stock_presets", {
     title: "Explore and run transparent stock screens",
-    annotations: { readOnlyHint: true },
+    annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
     description: "List or execute named stock-screen starting points: profitable value, dividend income, growth and cash flow, cash generators, or dividend growth. Every preset discloses exact thresholds, units, annual lookback and sorting and runs the existing backend screener rule engine. These are mechanical screens, not recommendations or replications of a famous investor's strategy. Listing presets makes no backend request. Read-only; running a screen uses the API's metered screening budget.",
     inputSchema: {
       action: z.enum(["list", "run"]).default("list").describe("list shows exact rules without running a screen; run executes one named preset."),
