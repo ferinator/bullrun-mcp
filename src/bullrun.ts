@@ -13,6 +13,9 @@ import { clientIpHeaders } from "./usage/clientIp.js";
 import { SCREEN_MAX_WAIT_MS, SCREEN_PATHS, screenGate } from "./usage/screenGate.js";
 import { parseQuotaNotice } from "./usage/allowance.js";
 
+/** Where each tool call is reported (usage/invocations.ts); a refused call must still be counted. */
+export const MCP_TOOL_REPORT_PATH = "/api/analytics/mcp-tools";
+
 const DEFAULT_BASE = "http://localhost:8085";
 const DEFAULT_AUTH_SERVER = "https://bull-run.org";
 const DEFAULT_PUBLIC_URL = "https://mcp.bull-run.org";
@@ -59,6 +62,7 @@ export type QueryParams = Record<string, string | number | boolean | undefined |
  */
 export async function bullrunGet<T>(path: string, params?: QueryParams, timeoutMs?: number): Promise<T> {
   const url = new URL(path.startsWith("/") ? path : `/${path}`, config.apiBase);
+  skipAfterRunOut(url);
   if (params) {
     for (const [key, value] of Object.entries(params)) {
       if (value !== undefined && value !== null && value !== "") {
@@ -101,6 +105,19 @@ export async function bullrunGet<T>(path: string, params?: QueryParams, timeoutM
   return (await res.json()) as T;
 }
 
+/**
+ * Once this tool call has hit an MCP allowance, usage/invocations.ts answers with the allowance
+ * message whatever the tool loads next, so later requests are wasted: metered ones are refused and
+ * the rest are discarded. One get_etf_exposures call kept fanning out to 260 requests, 109 of them
+ * refused. Requests already in flight still finish.
+ */
+function skipAfterRunOut(url: URL): void {
+  const exhausted = getMcpUsage()?.reads?.exhausted;
+  if (exhausted && url.pathname !== MCP_TOOL_REPORT_PATH) {
+    throw new Error(`Skipped bullrun-api request for ${url.pathname}: the ${exhausted.pool} ${exhausted.window} MCP allowance ran out earlier in this call`);
+  }
+}
+
 function upstreamTimeout(timeoutMs?: number): number {
   return Math.max(1, Math.min(timeoutMs ?? config.requestTimeoutMs, gatewayTimeLeft() ?? Infinity));
 }
@@ -124,6 +141,7 @@ function gatewayTimeLeft(): number | undefined {
  */
 export async function bullrunPost<T>(path: string, body?: unknown, timeoutMs?: number): Promise<T> {
   const url = new URL(path.startsWith("/") ? path : `/${path}`, config.apiBase);
+  skipAfterRunOut(url);
   // Whole-universe screens queue for one of a few slots; see usage/screenGate.ts.
   return SCREEN_PATHS.has(url.pathname)
     ? screenGate.run(() => sendPost<T>(url, body, timeoutMs), Math.min(SCREEN_MAX_WAIT_MS, gatewayTimeLeft() ?? Infinity))

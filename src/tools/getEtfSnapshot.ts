@@ -38,9 +38,10 @@ const inputSchema = {
 const outputSchema = {
   ticker: z.string(),
   found: z.boolean(),
-  requestedModules: z.array(snapshotModule),
-  availableModules: z.array(snapshotModule),
-  missingModules: z.array(snapshotModule),
+  // Fresh enums: a reused zod schema is emitted as a $ref.
+  requestedModules: z.array(z.enum(snapshotModule.options)),
+  availableModules: z.array(z.enum(snapshotModule.options)),
+  missingModules: z.array(z.enum(snapshotModule.options)),
   modules: z.record(z.string(), z.unknown()),
   asOf: z.record(z.string(), z.unknown()),
   dataQuality: z.record(z.string(), z.unknown()),

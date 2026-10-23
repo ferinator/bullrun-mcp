@@ -61,7 +61,11 @@ test("every tool in every catalog states all three annotation hints as booleans"
       await client.connect(clientSide);
       const label = JSON.stringify(options);
       const research = options.researchOnly || options.marketplace;
-      for (const { name, annotations } of (await client.listTools()).tools) {
+      for (const { name, title, annotations, inputSchema, outputSchema } of (await client.listTools()).tools) {
+        // The Claude directory shows annotations.title and reads a $ref parameter as untyped.
+        assert.ok(title, `${label} ${name} title`);
+        assert.equal(annotations?.title, title, `${label} ${name} annotations.title`);
+        assert.doesNotMatch(JSON.stringify({ inputSchema, outputSchema }), /"\$ref"/, `${label} ${name} schema uses $ref`);
         for (const hint of ["readOnlyHint", "destructiveHint", "openWorldHint"]) {
           assert.equal(typeof annotations?.[hint], "boolean", `${label} ${name} ${hint}`);
         }

@@ -6,12 +6,14 @@ import { errorText, identityPayload, resolveStockTicker, TICKER_CONVENTION, tick
 import { toolResult } from "./etfData.js";
 import { aggregateDailyPrices, closePerformance, emaSeries, macdSeries, normalizeDailyPrices, roundPriceMetric, rsiSeries, smaSeries, validCalendarDate } from "./stockPriceHistoryData.js";
 
-const calendarDate = z.string().refine(validCalendarDate, "Use a real calendar date in YYYY-MM-DD format.");
+// A factory, not a shared instance: a reused zod schema is emitted as a $ref, which the Claude
+// directory reads as a parameter with no type.
+const calendarDate = () => z.string().refine(validCalendarDate, "Use a real calendar date in YYYY-MM-DD format.");
 const inputSchema = {
   ticker: z.string().trim().min(1).max(32).describe("Bullrun stock ticker, e.g. AAPL, SAP, ABBN, 6324.T or 7203. " + TICKER_CONVENTION),
   interval: z.enum(["daily", "weekly", "monthly"]).default("daily").describe("Aggregate stored daily bars. Weekly buckets start Monday; monthly buckets use the calendar month. No intraday or live quotes."),
-  startDate: calendarDate.optional().describe("Inclusive trade-date cutoff, applied after loading the latest source bars. Cannot page into history older than the source limit."),
-  endDate: calendarDate.optional().describe("Inclusive last trade date; the API still loads the most recent source bars before this filter."),
+  startDate: calendarDate().optional().describe("Inclusive trade-date cutoff, applied after loading the latest source bars. Cannot page into history older than the source limit."),
+  endDate: calendarDate().optional().describe("Inclusive last trade date; the API still loads the most recent source bars before this filter."),
   limit: z.number().int().min(1).max(2600).default(260).describe("Maximum most-recent DAILY source bars to load before date filtering and aggregation (hard cap 2600). Increase for indicator warm-up or longer history."),
   indicators: z.array(z.enum(["sma", "ema", "rsi", "macd"])).max(4).default([]).describe("Optional indicators computed on the selected interval's closes after date filtering. Insufficient warm-up yields null, never a fabricated value."),
   movingAveragePeriod: z.number().int().min(2).max(250).default(20).describe("Observation count for SMA and EMA, in the selected interval."),

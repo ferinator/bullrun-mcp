@@ -79,18 +79,20 @@ for (const signedIn of [false, true]) {
     const text = result.content[0].text
     assert.match(text, /700 successful tool calls per rolling 30 days/)
     assert.match(text, signedIn ? /This Bullrun account/ : /This network/)
-    assert.match(text, /from 2026-11-20 12:00 UTC, as earlier calls age out/)
+    assert.match(text, /It starts coming back at 12:00 UTC on 20 Nov 2026 \(in about [^)]+\): each successful call counts for 30 days/)
     assert.match(text, /Failed calls do not count toward this allowance/)
-    assert.ok(text.includes(`Bullrun Pro subscriptions with higher MCP limits are available at ${PRICING_URL}`))
+    assert.match(text, /you can subscribe to Bullrun Pro \(CHF 5\/month or CHF 50\/year\) for higher MCP limits/)
+    assert.ok(text.includes(`See ${PRICING_URL}?utm_source=mcp&utm_medium=assistant&utm_campaign=allowance&utm_content=mcp_calls_30d for plans and limits.`))
     assert.match(text, /Pro remains subject to fair-use and pacing limits/)
     assert.match(text, /website remains available for free manual screening and research/)
     if (signedIn) {
       assert.match(text, /Subscribe using the Bullrun account connected to this MCP session/)
       assert.ok(!text.includes(ACCOUNT_ENDPOINT))
-      assert.doesNotMatch(text, /After subscribing, connect|reconnect/)
+      assert.doesNotMatch(text, /After signing up|connect that account|reconnect|trial/)
       assert.equal(calls[0].headers.authorization, 'Bearer test-bearer')
     } else {
-      assert.ok(text.includes(`After subscribing, connect that Bullrun account at ${ACCOUNT_ENDPOINT} to use Pro limits`))
+      assert.match(text, /New Bullrun accounts start with a 14-day Pro trial, no card needed/)
+      assert.ok(text.includes(`After signing up or subscribing, connect that account at ${ACCOUNT_ENDPOINT} to use its limits`))
     }
     assert.doesNotMatch(text, /data reads|unlimited|remove the .*caps/)
     assert.equal(calls.length, 1)

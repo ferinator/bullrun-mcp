@@ -93,6 +93,18 @@ function instructionsFor(options: McpServerOptions): string {
   return research + "Bullrun market-data and portfolio tools. " + STOCK_DATA_GUIDANCE + PORTFOLIO_GUIDANCE;
 }
 
+/** The Claude directory reads a tool's display name from annotations.title, not the top-level title. */
+function titleAnnotations(server: McpServer): void {
+  type RegisterTool = (name: string, config: Record<string, unknown>, callback: unknown) => unknown;
+  const register = server.registerTool.bind(server) as unknown as RegisterTool;
+  const registerWithTitle: RegisterTool = (name, config, callback) => {
+    const annotations = (config.annotations ?? {}) as Record<string, unknown>;
+    return register(name, typeof config.title === "string" && annotations.title === undefined
+      ? { ...config, annotations: { ...annotations, title: config.title } } : config, callback);
+  };
+  server.registerTool = registerWithTitle as unknown as typeof server.registerTool;
+}
+
 /**
  * Build a fresh MCP server instance with the market-data and portfolio tools registered.
  *
@@ -111,6 +123,7 @@ export function createMcpServer(requested: McpServerOptions = {}): McpServer {
     },
   );
 
+  titleAnnotations(server);
   instrumentMcpTools(server);
   if (options.marketplace) boundMarketplaceResults(server);
   addPlatformLinks(server);

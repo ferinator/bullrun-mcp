@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
-import { bullrunPost } from "../bullrun.js";
+import { bullrunPost, MCP_TOOL_REPORT_PATH } from "../bullrun.js";
 import { getMcpUsage, runWithMcpUsage, type McpReadCount } from "./context.js";
 import { isProbeClient, PROBE_CLIENT_CLASS } from "./probes.js";
 import { heavyToolCallerKey, heavyToolLimitedResult, heavyToolLimiter, type HeavyToolLimiter } from "./heavyTools.js";
@@ -30,7 +30,7 @@ export interface ToolInvocation {
 }
 
 type Reporter = (event: ToolInvocation) => Promise<unknown>;
-const report: Reporter = event => bullrunPost("/api/analytics/mcp-tools", event, 750);
+const report: Reporter = event => bullrunPost(MCP_TOOL_REPORT_PATH, event, 750);
 
 /** Counts executed callbacks once, including local failures and tools with no API calls. */
 export async function recordMcpToolInvocation<T>(

@@ -24,9 +24,10 @@ const inputSchema = {
 
 const outputSchema = {
   ticker: z.string(),
-  requestedSeries: z.array(seriesType),
-  availableSeries: z.array(seriesType),
-  unavailableSeries: z.array(seriesType),
+  // Fresh enums: a reused zod schema is emitted as a $ref.
+  requestedSeries: z.array(z.enum(seriesType.options)),
+  availableSeries: z.array(z.enum(seriesType.options)),
+  unavailableSeries: z.array(z.enum(seriesType.options)),
   interval: z.enum(["daily", "weekly", "monthly"]),
   series: z.record(z.string(), z.unknown()),
   metadata: z.record(z.string(), z.unknown()),

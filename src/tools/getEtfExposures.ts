@@ -36,11 +36,12 @@ const inputSchema = {
 
 const outputSchema = {
   ticker: z.string(),
-  requestedTypes: z.array(exposureType),
-  availableTypes: z.array(exposureType),
-  unavailableTypes: z.array(exposureType),
+  // Fresh enums: a reused zod schema is emitted as a $ref.
+  requestedTypes: z.array(z.enum(exposureType.options)),
+  availableTypes: z.array(z.enum(exposureType.options)),
+  unavailableTypes: z.array(z.enum(exposureType.options)),
   /** Types whose source read failed (quota, outage): unknown, not unavailable. */
-  notLoadedTypes: z.array(exposureType).optional(),
+  notLoadedTypes: z.array(z.enum(exposureType.options)).optional(),
   exposures: z.record(z.string(), z.unknown()),
   coverage: z.record(z.string(), z.unknown()),
   warnings: z.array(z.string()),

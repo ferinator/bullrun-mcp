@@ -39,6 +39,7 @@ const { recordMcpToolInvocation } = await import('../dist/usage/invocations.js')
 const { createHeavyToolLimiter, heavyToolCallerKey } = await import('../dist/usage/heavyTools.js')
 const { createGate, SCREEN_PATHS } = await import('../dist/usage/screenGate.js')
 const { allowanceMessage, parseQuotaNotice, ACCOUNT_ENDPOINT, PRICING_URL } = await import('../dist/usage/allowance.js')
+const { mapWithConcurrency } = await import('../dist/tools/etfData.js')
 
 test.after(() => api.close())
 
@@ -215,17 +216,21 @@ test('free read allowances explain Pro subscriptions and the appropriate account
   const anonMonth = allowanceMessage({ pool: 'caller', window: '30d', limit: 3500, resetAt: at }, { signedIn: false, marketplace: false })
   assert.match(anonMonth, /this month's free Bullrun allowance/)
   assert.match(anonMonth, /3,500 data reads in 30 days/)
-  assert.match(anonMonth, /from 2026-11-20 10:05 UTC/)
-  assert.ok(anonMonth.includes(`After subscribing, connect that Bullrun account at ${ACCOUNT_ENDPOINT}`))
-  assert.ok(anonMonth.includes(`Bullrun Pro subscriptions with higher MCP limits are available at ${PRICING_URL}`))
+  assert.match(anonMonth, /It starts coming back at 10:05 UTC on 20 Nov 2026 \(in about [^)]+\): each read counts for 30 days/)
+  assert.match(anonMonth, /New Bullrun accounts start with a 14-day Pro trial, no card needed/)
+  assert.ok(anonMonth.includes(`After signing up or subscribing, connect that account at ${ACCOUNT_ENDPOINT}`))
+  assert.match(anonMonth, /you can subscribe to Bullrun Pro \(CHF 5\/month or CHF 50\/year\) for higher MCP limits/)
+  assert.ok(anonMonth.includes(`See ${PRICING_URL}?utm_source=mcp&utm_medium=assistant&utm_campaign=allowance&utm_content=caller_30d for plans and limits.`))
   const anonDay = allowanceMessage({ pool: 'caller', window: '24h', limit: 500, resetAt: at }, { signedIn: false, marketplace: false })
   assert.match(anonDay, /today's free Bullrun allowance .*500 data reads in 24 hours/)
+  assert.match(anonDay, /each read counts for 24 hours, so the allowance refills gradually/)
+  assert.ok(anonDay.includes('utm_content=caller_24h'))
   // A connected free account gains Pro limits when that same account subscribes; no reconnect is required.
   const account = allowanceMessage({ pool: 'account', window: '30d', limit: 10500, resetAt: at }, { signedIn: true, marketplace: false })
   assert.match(account, /this month's allowance for your free Bullrun account \(10,500 data reads in 30 days\)/)
   assert.ok(account.includes(PRICING_URL) && !account.includes(ACCOUNT_ENDPOINT))
   assert.match(account, /Subscribe using the Bullrun account connected to this MCP session/)
-  assert.doesNotMatch(account, /After subscribing, connect|reconnect/)
+  assert.doesNotMatch(account, /After signing up|connect that account|reconnect|trial/)
   for (const text of [anonMonth, anonDay, account]) {
     assert.match(text, /Pro remains subject to fair-use and pacing limits/)
     assert.match(text, /website remains available for free manual screening and research/)
@@ -259,7 +264,7 @@ test('shared capacity, probes, Pro and marketplace limits do not send callers to
   }
   // Distinct from a coverage answer and from the per-minute pacing message.
   for (const text of [...shared, probe, pro, marketplace, gatewayCaller]) {
-    assert.match(text, /from 2026-11-20 10:05 UTC/)
+    assert.match(text, /It starts coming back at 10:05 UTC on 20 Nov 2026/)
     assert.match(text, /usage allowance, not a gap in Bullrun's data/)
     assert.doesNotMatch(text, /per minute|could not be loaded|not stored/)
   }
@@ -297,13 +302,42 @@ test('a run-out mid-call answers with the allowance message, however the tool ha
       assert.ok(!text.includes(ACCOUNT_ENDPOINT))
     } else {
       assert.ok(text.includes(ACCOUNT_ENDPOINT))
-      assert.match(text, /After subscribing, connect that Bullrun account/)
+      assert.match(text, /After signing up or subscribing, connect that account/)
     }
     assert.equal(result.content.length, 1)
   }
   assert.deepEqual(events.map(e => [e.outcome, e.quotaExhausted]),
     [['error', 'caller:30d'], ['error', 'caller:30d'], ['error', 'account:30d']])
   assert.equal(events[0].meteredReads, 1)
+})
+
+test('a run-out says in UTC and in rough hours when the allowance starts coming back', () => {
+  const caller = { signedIn: false, marketplace: false }
+  const now = new Date('2026-10-23T17:55:00Z')
+  const message = resetAt => allowanceMessage({ pool: 'caller', window: '24h', limit: 500, resetAt }, caller, now)
+  assert.match(message('2026-10-24T07:55:00Z'), /It starts coming back at 07:55 UTC on 24 Oct 2026 \(in about 14 hours\)/)
+  assert.match(message('2026-10-23T18:25:00Z'), /at 18:25 UTC on 23 Oct 2026 \(in about 30 minutes\)/)
+  assert.match(message('2026-11-20T17:55:00Z'), /at 17:55 UTC on 20 Nov 2026 \(in about 28 days\)/)
+  // A reset already due (clock skew) never reads as a time in the past.
+  assert.match(message('2026-10-23T17:50:00Z'), /\(in about 1 minute\)/)
+  assert.match(message(undefined), /It comes back gradually: each read counts for 24 hours/)
+  assert.match(message('not a date'), /It comes back gradually/)
+})
+
+test('after a run-out a fan-out tool stops calling bullrun-api, and the refused call is still reported', async () => {
+  const before = seen.length
+  const result = await runWithMcpUsage({ clientIp: '203.0.113.52' }, () => recordMcpToolInvocation('get_etf_exposures', async () => {
+    // Like get_etf_exposures: one lookup per holding. The third lookup finds the allowance spent.
+    const holdings = Array.from({ length: 40 }, (_, i) => i === 2 ? '/api/spent/fanout' : `/api/holding/H${i}`)
+    await mapWithConcurrency(holdings, 1, path => bullrunGet(path).catch(() => null))
+    return { content: [{ type: 'text', text: 'exposures' }] }
+  }))
+  const urls = seen.slice(before).map(request => request.url)
+  assert.equal(result.isError, true)
+  assert.match(result.content[0].text, /this month's free Bullrun allowance/)
+  assert.deepEqual(urls.filter(url => !url.startsWith('/api/analytics/')), ['/api/holding/H0', '/api/holding/H1', '/api/spent/fanout'])
+  // The tool-call report is exempt, so the refusal still reaches the admin analytics.
+  assert.deepEqual(urls.filter(url => url.startsWith('/api/analytics/')), ['/api/analytics/mcp-tools'])
 })
 
 test("a website-quota or proxy 429 keeps the tool's own answer", async () => {
