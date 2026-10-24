@@ -725,10 +725,16 @@ ok(
 
 const rp = await client.callTool({ name: "list_portfolios", arguments: {} });
 ok(rp.isError === true && /Authentication required/i.test(rp.content?.[0]?.text ?? ""), "list_portfolios(no token) -> auth-required error", rp.content?.[0]?.text ?? "");
-// The anonymous refusal is where a user decides to connect, so it must name the login endpoint.
+// The refusal must link a readable setup guide rather than a machine OAuth endpoint.
 const anonSave = await client.callTool({ name: "save_research_shortlist", arguments: { tickers: ["AAPL"] } });
-ok(anonSave.isError === true && (anonSave.content?.[0]?.text ?? "").includes("https://mcp.bull-run.org/account/mcp"),
-  "save_research_shortlist(no token) -> names the account endpoint", anonSave.content?.[0]?.text ?? "");
+ok(anonSave.isError === true && (anonSave.content?.[0]?.text ?? "").includes("https://bull-run.org/mcp#mcp-connect")
+  && !(anonSave.content?.[0]?.text ?? "").includes("https://mcp.bull-run.org/account/mcp"),
+  "save_research_shortlist(no token) -> links the account setup guide", anonSave.content?.[0]?.text ?? "");
+const anonymousCapabilities = parse(await client.callTool({ name: "get_capabilities", arguments: {} }));
+ok(anonymousCapabilities.authenticated === false
+  && anonymousCapabilities.message.includes("https://bull-run.org/mcp#mcp-connect")
+  && anonymousCapabilities.message.includes("free Bullrun account"),
+  "get_capabilities(no token) -> explains free account setup", anonymousCapabilities.message);
 
 // The dedicated login endpoint must 401-challenge even in authless mode, so an OAuth client
 // (Claude) is driven into the sign-in flow while /mcp stays open for anonymous callers. A raw

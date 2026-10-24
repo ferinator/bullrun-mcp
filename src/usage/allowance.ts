@@ -4,7 +4,7 @@
  * Shared capacity, Pro fair-use and marketplace limits have their own next steps.
  * It stays distinct from coverage answers ("no data stored") and from the per-minute pacing message.
  */
-export const ACCOUNT_ENDPOINT = "https://mcp.bull-run.org/account/mcp";
+export const ACCOUNT_SETUP_URL = "https://bull-run.org/mcp#mcp-connect";
 export const PRICING_URL = "https://bull-run.org/pricing";
 /** As the plans page shows them (gui/src/components/PricingPage.tsx). */
 const PRO_PRICES = "CHF 5/month or CHF 50/year";
@@ -51,15 +51,12 @@ function resetTime(resetAt: string | undefined, now: Date): string | undefined {
 }
 
 /** The windows roll: resetAt is when the oldest counted use expires, so the allowance refills from then on. */
-function whenUsageReturns(resetAt: string | undefined, unit: "read" | "successful call", span: string, now: Date): string {
+function whenUsageReturns(resetAt: string | undefined, now: Date): string {
   const at = resetTime(resetAt, now);
-  const refill = `each ${unit} counts for ${span}, so the allowance refills gradually`;
-  return at ? `It starts coming back at ${at}: ${refill}.` : `It comes back gradually: ${refill}.`;
+  return at ? `Your allowance starts refilling at ${at}.` : "Your allowance refills gradually as earlier use expires.";
 }
 
 const reads = (limit: number) => `${limit.toLocaleString("en-US")} data reads`;
-
-const MANUAL_RESEARCH = "The website remains available for free manual screening and research.";
 
 /** Tagged so the admin MCP funnel can count plans-page visits that started at a run-out message. */
 function pricingLink(notice: QuotaNotice): string {
@@ -72,51 +69,44 @@ function pricingLink(notice: QuotaNotice): string {
 }
 
 function proGuidance(signedIn: boolean, plans: string): string {
-  return `To continue sooner, you can subscribe to Bullrun Pro (${PRO_PRICES}) for higher MCP limits. `
-    + `See ${plans} for plans and limits. `
+  return `[Get higher limits with Bullrun Pro](${plans}) — ${PRO_PRICES}. `
     + (signedIn
-      ? "Subscribe using the Bullrun account connected to this MCP session. "
-      : `New Bullrun accounts start with a ${TRIAL_DAYS}-day Pro trial, no card needed. `
-        + `After signing up or subscribing, connect that account at ${ACCOUNT_ENDPOINT} to use its limits. `)
-    + "Pro remains subject to fair-use and pacing limits.";
+      ? "Upgrade the account already connected to your AI app. "
+      : `New accounts get a ${TRIAL_DAYS}-day free trial, no card needed. `
+        + `[Connect your account](${ACCOUNT_SETUP_URL}) in your AI app to use its limits. `)
+    + "Pro usage limits apply.";
 }
 
 export function allowanceMessage(notice: QuotaNotice, caller: { signedIn: boolean; marketplace: boolean },
   now = new Date()): string {
   const month = notice.window === "30d";
-  const period = month ? "this month's" : "today's";
   const span = month ? "30 days" : notice.window === "24h" ? "24 hours" : notice.window.replace(/h$/, " hours");
-  const back = whenUsageReturns(notice.resetAt, "read", span, now);
+  const back = whenUsageReturns(notice.resetAt, now);
   const subscribe = (signedIn: boolean) => proGuidance(signedIn, pricingLink(notice));
   if (notice.pool === "mcp_calls") {
-    const owner = caller.marketplace ? "marketplace installation" : caller.signedIn ? "Bullrun account" : "network";
-    return `This ${owner} has used its free MCP allowance of ${notice.limit.toLocaleString("en-US")} successful tool calls per rolling 30 days. `
-      + `${whenUsageReturns(notice.resetAt, "successful call", "30 days", now)} Failed calls do not count toward this allowance. `
-      + (caller.marketplace ? "" : `${subscribe(caller.signedIn)} ${MANUAL_RESEARCH} `)
-      + "This is a usage allowance, not a coverage answer.";
+    const owner = caller.marketplace ? "Your marketplace installation" : caller.signedIn ? "Your Bullrun account" : "This network";
+    return `${owner} has reached its free limit of ${notice.limit.toLocaleString("en-US")} successful tool calls per rolling 30 days. `
+      + `${back} Failed calls don't count. `
+      + (caller.marketplace ? "" : subscribe(caller.signedIn));
   }
-  const notCoverage = "This is a usage allowance, not a gap in Bullrun's data.";
 
   if (caller.marketplace || notice.pool === "installation") {
-    return `This marketplace installation has used ${period} Bullrun research allowance (${reads(notice.limit)} in ${span}). ${back} ${notCoverage}`;
+    return `Your marketplace installation has reached its research limit (${reads(notice.limit)} per rolling ${span}). ${back}`;
   }
   if (notice.pool === "pro") {
-    return `This account has reached Bullrun Pro's fair-use limit (${reads(notice.limit)} in ${span}). ${back} ${notCoverage}`;
+    return `You've reached your Bullrun Pro research limit (${reads(notice.limit)} per rolling ${span}). ${back}`;
   }
   if (notice.pool === "probe") {
-    return `Bullrun's shared MCP health-check allowance is used up for now (${reads(notice.limit)} in ${span}). ${back} ${notCoverage}`;
+    return `Bullrun's shared health-check limit has been reached (${reads(notice.limit)} per rolling ${span}). ${back}`;
   }
   if (notice.pool === "anonymous_total" || notice.pool === "shared") {
-    return `Bullrun's free capacity for connections without an account is used up for now, across all users. ${back} `
-      + `Connect a free Bullrun account at ${ACCOUNT_ENDPOINT} to use its separate allowance instead of this shared capacity. `
-      + `No subscription is required for that option. ${MANUAL_RESEARCH} ${notCoverage}`;
+    return `Bullrun's shared anonymous research capacity is full for now. ${back} `
+      + `[Connect a free account](${ACCOUNT_SETUP_URL}) for a separate allowance. No subscription needed.`;
   }
-  if (notice.pool === "account" || caller.signedIn) {
-    return `You've used ${period} allowance for your free Bullrun account (${reads(notice.limit)} in ${span}). ${back} `
-      + `${subscribe(true)} ${MANUAL_RESEARCH} ${notCoverage}`;
-  }
-  return `You've used ${period} free Bullrun allowance on this connection (${reads(notice.limit)} in ${span}). ${back} `
-    + `${subscribe(false)} ${MANUAL_RESEARCH} ${notCoverage}`;
+  const signedIn = notice.pool === "account" || caller.signedIn;
+  const owner = signedIn ? "Your Bullrun account" : "This connection";
+  return `${owner} has reached its free research limit (${reads(notice.limit)} per rolling ${span}). ${back} `
+    + subscribe(signedIn);
 }
 
 /** Short label for the mcp_tool_call analytics row, e.g. "caller:30d". */

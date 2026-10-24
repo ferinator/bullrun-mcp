@@ -195,7 +195,8 @@ test("OAuth user and read:portfolios scope are required before any risk or holdi
     const tool = tools.get("get_portfolio_analytics");
     const result = await runWithAuth(identity, () => tool.callback({ portfolioId: 7, candidateTicker: "CAND", includeLookThrough: true }));
     assert.equal(result.isError, true);
-    assert.match(result.content[0].text, /Authentication required|associated Bullrun user|read:portfolios/);
+    assert.match(result.content[0].text, /Authentication required|Reconnect your Bullrun account|read:portfolios/);
+    assert.ok(result.content[0].text.includes("https://bull-run.org/mcp#mcp-connect"));
     assert.equal(requests.length, 0);
   }
 });

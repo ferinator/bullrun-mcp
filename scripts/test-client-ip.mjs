@@ -38,7 +38,7 @@ const { bullrunGet, bullrunPost } = await import('../dist/bullrun.js')
 const { recordMcpToolInvocation } = await import('../dist/usage/invocations.js')
 const { createHeavyToolLimiter, heavyToolCallerKey } = await import('../dist/usage/heavyTools.js')
 const { createGate, SCREEN_PATHS } = await import('../dist/usage/screenGate.js')
-const { allowanceMessage, parseQuotaNotice, ACCOUNT_ENDPOINT, PRICING_URL } = await import('../dist/usage/allowance.js')
+const { allowanceMessage, parseQuotaNotice, ACCOUNT_SETUP_URL, PRICING_URL } = await import('../dist/usage/allowance.js')
 const { mapWithConcurrency } = await import('../dist/tools/etfData.js')
 
 test.after(() => api.close())
@@ -214,28 +214,31 @@ test('only an MCP allowance 429 is read as a run-out notice', () => {
 test('free read allowances explain Pro subscriptions and the appropriate account handoff', () => {
   const at = '2026-11-20T10:05:00Z'
   const anonMonth = allowanceMessage({ pool: 'caller', window: '30d', limit: 3500, resetAt: at }, { signedIn: false, marketplace: false })
-  assert.match(anonMonth, /this month's free Bullrun allowance/)
-  assert.match(anonMonth, /3,500 data reads in 30 days/)
-  assert.match(anonMonth, /It starts coming back at 10:05 UTC on 20 Nov 2026 \(in about [^)]+\): each read counts for 30 days/)
-  assert.match(anonMonth, /New Bullrun accounts start with a 14-day Pro trial, no card needed/)
-  assert.ok(anonMonth.includes(`After signing up or subscribing, connect that account at ${ACCOUNT_ENDPOINT}`))
-  assert.match(anonMonth, /you can subscribe to Bullrun Pro \(CHF 5\/month or CHF 50\/year\) for higher MCP limits/)
-  assert.ok(anonMonth.includes(`See ${PRICING_URL}?utm_source=mcp&utm_medium=assistant&utm_campaign=allowance&utm_content=caller_30d for plans and limits.`))
+  assert.match(anonMonth, /This connection.*free research limit/)
+  assert.match(anonMonth, /3,500 data reads per rolling 30 days/)
+  assert.match(anonMonth, /starts refilling at 10:05 UTC on 20 Nov 2026 \(in about [^)]+\)/)
+  assert.match(anonMonth, /New accounts.*14-day free trial, no card needed/)
+  assert.ok(anonMonth.includes(`[Connect your account](${ACCOUNT_SETUP_URL})`))
+  assert.match(anonMonth, /in your AI app to use its limits/)
+  assert.ok(anonMonth.includes(`[Get higher limits with Bullrun Pro](${PRICING_URL}?utm_source=mcp&utm_medium=assistant&utm_campaign=allowance&utm_content=caller_30d)`))
   const anonDay = allowanceMessage({ pool: 'caller', window: '24h', limit: 500, resetAt: at }, { signedIn: false, marketplace: false })
-  assert.match(anonDay, /today's free Bullrun allowance .*500 data reads in 24 hours/)
-  assert.match(anonDay, /each read counts for 24 hours, so the allowance refills gradually/)
+  assert.match(anonDay, /This connection.*500 data reads per rolling 24 hours/)
+  assert.match(anonDay, /starts refilling at/)
   assert.ok(anonDay.includes('utm_content=caller_24h'))
   // A connected free account gains Pro limits when that same account subscribes; no reconnect is required.
   const account = allowanceMessage({ pool: 'account', window: '30d', limit: 10500, resetAt: at }, { signedIn: true, marketplace: false })
-  assert.match(account, /this month's allowance for your free Bullrun account \(10,500 data reads in 30 days\)/)
-  assert.ok(account.includes(PRICING_URL) && !account.includes(ACCOUNT_ENDPOINT))
-  assert.match(account, /Subscribe using the Bullrun account connected to this MCP session/)
-  assert.doesNotMatch(account, /After signing up|connect that account|reconnect|trial/)
+  assert.match(account, /Your Bullrun account.*10,500 data reads per rolling 30 days/)
+  assert.ok(account.includes(PRICING_URL) && !account.includes(ACCOUNT_SETUP_URL))
+  assert.match(account, /Upgrade the account already connected/)
+  assert.doesNotMatch(account, /Connect your account|reconnect|trial/)
   for (const text of [anonMonth, anonDay, account]) {
-    assert.match(text, /Pro remains subject to fair-use and pacing limits/)
-    assert.match(text, /website remains available for free manual screening and research/)
-    assert.match(text, /usage allowance, not a gap in Bullrun's data/)
-    assert.doesNotMatch(text, /per minute|could not be loaded|not stored|unlimited|remove the .*caps/)
+    assert.match(text, /CHF 5\/month or CHF 50\/year/)
+    assert.match(text, /Pro usage limits apply/)
+    assert.doesNotMatch(text, /account\/mcp|per minute|could not be loaded|not stored|unlimited|remove the .*caps|today's|this month's/)
+  }
+  for (const text of [anonMonth, anonDay]) {
+    const visible = text.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    assert.ok(visible.trim().split(/\s+/).length < 110, 'anonymous quota guidance stays short')
   }
 })
 
@@ -244,33 +247,36 @@ test('shared capacity, probes, Pro and marketplace limits do not send callers to
   const shared = ['anonymous_total', 'shared'].map(pool => allowanceMessage(
     { pool, window: '24h', limit: 50000, resetAt: at }, { signedIn: false, marketplace: false }))
   for (const text of shared) {
-    assert.match(text, /across all users/)
-    assert.ok(text.includes(`Connect a free Bullrun account at ${ACCOUNT_ENDPOINT}`))
-    assert.match(text, /No subscription is required for that option/)
-    assert.match(text, /free manual screening and research/)
+    assert.match(text, /shared anonymous research capacity/)
+    assert.ok(text.includes(`[Connect a free account](${ACCOUNT_SETUP_URL})`))
+    assert.match(text, /separate allowance/)
+    assert.match(text, /No subscription needed/)
   }
   const probe = allowanceMessage({ pool: 'probe', window: '24h', limit: 100, resetAt: at }, { signedIn: false, marketplace: false })
-  assert.match(probe, /shared MCP health-check allowance/)
-  assert.ok(!probe.includes(ACCOUNT_ENDPOINT))
+  assert.match(probe, /shared health-check limit.*100 data reads per rolling 24 hours/)
+  assert.ok(!probe.includes(ACCOUNT_SETUP_URL))
   const pro = allowanceMessage({ pool: 'pro', window: '5h', limit: 1000, resetAt: at }, { signedIn: true, marketplace: false })
-  assert.match(pro, /Pro's fair-use limit \(1,000 data reads in 5 hours\)/)
+  assert.match(pro, /Bullrun Pro research limit.*1,000 data reads per rolling 5 hours/)
   const marketplace = allowanceMessage({ pool: 'installation', window: '24h', limit: 10000, resetAt: at }, { signedIn: false, marketplace: true })
+  assert.match(marketplace, /10,000 data reads per rolling 24 hours/)
   // Marketplace context must never redirect installation billing to Bullrun, whatever notice arrives.
   const gatewayCaller = allowanceMessage({ pool: 'caller', window: '24h', limit: 500, resetAt: at }, { signedIn: false, marketplace: true })
   const gatewayCalls = allowanceMessage({ pool: 'mcp_calls', window: '30d', limit: 700, resetAt: at }, { signedIn: false, marketplace: true })
   for (const text of [marketplace, gatewayCaller, gatewayCalls]) {
-    assert.ok(!text.includes(ACCOUNT_ENDPOINT))
+    assert.ok(!text.includes(ACCOUNT_SETUP_URL))
     assert.match(text, /marketplace installation/)
   }
-  // Distinct from a coverage answer and from the per-minute pacing message.
-  for (const text of [...shared, probe, pro, marketplace, gatewayCaller]) {
-    assert.match(text, /It starts coming back at 10:05 UTC on 20 Nov 2026/)
-    assert.match(text, /usage allowance, not a gap in Bullrun's data/)
-    assert.doesNotMatch(text, /per minute|could not be loaded|not stored/)
+  assert.match(gatewayCaller, /500 data reads per rolling 24 hours/)
+  assert.match(gatewayCalls, /700 successful tool calls per rolling 30 days/)
+  assert.match(gatewayCalls, /Failed calls don't count/)
+  // All branches identify usage limits and the first refill, without claiming missing data or a full reset.
+  for (const text of [...shared, probe, pro, marketplace, gatewayCaller, gatewayCalls]) {
+    assert.match(text, /starts refilling at 10:05 UTC on 20 Nov 2026/)
+    assert.doesNotMatch(text, /account\/mcp|per minute|could not be loaded|not stored|no data|resets at/i)
   }
   for (const text of [...shared, probe, pro, marketplace, gatewayCaller, gatewayCalls]) {
     assert.ok(!text.includes(PRICING_URL))
-    assert.doesNotMatch(text, /subscrib(?:e|ing)|Pro subscriptions|upgrade|remove the .*caps/i)
+    assert.doesNotMatch(text, /subscrib(?:e|ing)|Pro subscriptions|upgrade|higher limits|trial|CHF|unlimited|remove the .*caps/i)
   }
 })
 
@@ -295,14 +301,17 @@ test('a run-out mid-call answers with the allowance message, however the tool ha
     const result = await (signedIn ? runWithAuth({ token: 't', userId: 7, scopes: [] }, invoke) : invoke())
     assert.equal(result.isError, true)
     const text = result.content[0].text
-    assert.match(text, signedIn ? /allowance for your free Bullrun account/ : /this month's free Bullrun allowance/)
+    assert.match(text, signedIn ? /Your Bullrun account.*free research limit/ : /This connection.*free research limit/)
+    assert.match(text, signedIn ? /10,500 data reads per rolling 30 days/ : /3,500 data reads per rolling 30 days/)
     assert.ok(text.includes(PRICING_URL))
+    assert.doesNotMatch(text, /account\/mcp/)
     if (signedIn) {
-      assert.match(text, /Subscribe using the Bullrun account connected to this MCP session/)
-      assert.ok(!text.includes(ACCOUNT_ENDPOINT))
+      assert.match(text, /Upgrade the account already connected/)
+      assert.ok(!text.includes(ACCOUNT_SETUP_URL))
+      assert.doesNotMatch(text, /reconnect|trial/)
     } else {
-      assert.ok(text.includes(ACCOUNT_ENDPOINT))
-      assert.match(text, /After signing up or subscribing, connect that account/)
+      assert.ok(text.includes(`[Connect your account](${ACCOUNT_SETUP_URL})`))
+      assert.match(text, /in your AI app to use its limits/)
     }
     assert.equal(result.content.length, 1)
   }
@@ -311,17 +320,18 @@ test('a run-out mid-call answers with the allowance message, however the tool ha
   assert.equal(events[0].meteredReads, 1)
 })
 
-test('a run-out says in UTC and in rough hours when the allowance starts coming back', () => {
+test('a run-out says in UTC and in rough hours when the allowance starts refilling', () => {
   const caller = { signedIn: false, marketplace: false }
   const now = new Date('2026-10-23T17:55:00Z')
   const message = resetAt => allowanceMessage({ pool: 'caller', window: '24h', limit: 500, resetAt }, caller, now)
-  assert.match(message('2026-10-24T07:55:00Z'), /It starts coming back at 07:55 UTC on 24 Oct 2026 \(in about 14 hours\)/)
+  assert.match(message('2026-10-24T07:55:00Z'), /starts refilling at 07:55 UTC on 24 Oct 2026 \(in about 14 hours\)/)
   assert.match(message('2026-10-23T18:25:00Z'), /at 18:25 UTC on 23 Oct 2026 \(in about 30 minutes\)/)
   assert.match(message('2026-11-20T17:55:00Z'), /at 17:55 UTC on 20 Nov 2026 \(in about 28 days\)/)
   // A reset already due (clock skew) never reads as a time in the past.
   assert.match(message('2026-10-23T17:50:00Z'), /\(in about 1 minute\)/)
-  assert.match(message(undefined), /It comes back gradually: each read counts for 24 hours/)
-  assert.match(message('not a date'), /It comes back gradually/)
+  assert.match(message(undefined), /refills gradually as earlier use expires/)
+  assert.match(message('not a date'), /refills gradually as earlier use expires/)
+  assert.doesNotMatch(message('not a date'), /Invalid Date|starts refilling at|resets at/)
 })
 
 test('after a run-out a fan-out tool stops calling bullrun-api, and the refused call is still reported', async () => {
@@ -334,7 +344,7 @@ test('after a run-out a fan-out tool stops calling bullrun-api, and the refused 
   }))
   const urls = seen.slice(before).map(request => request.url)
   assert.equal(result.isError, true)
-  assert.match(result.content[0].text, /this month's free Bullrun allowance/)
+  assert.match(result.content[0].text, /This connection.*free research limit.*3,500 data reads per rolling 30 days/)
   assert.deepEqual(urls.filter(url => !url.startsWith('/api/analytics/')), ['/api/holding/H0', '/api/holding/H1', '/api/spent/fanout'])
   // The tool-call report is exempt, so the refusal still reaches the admin analytics.
   assert.deepEqual(urls.filter(url => url.startsWith('/api/analytics/')), ['/api/analytics/mcp-tools'])

@@ -21,7 +21,7 @@ const result = (payload: Record<string, unknown>) => ({ content: [{ type: "text"
 function message(error: unknown, saving = false): string {
   const detail = error instanceof Error ? error.message : String(error);
   // Scope errors are locally constructed. Never forward upstream bodies or internal URLs.
-  if (/^Authentication required:|^The access token has no associated Bullrun user|^This tool requires the /.test(detail)) return detail;
+  if (/^Authentication required:|^Reconnect your Bullrun account|^This tool requires the /.test(detail)) return detail;
   const status = /bullrun-api (\d{3}) /.exec(detail)?.[1];
   if (status === "404" && saving) return "Unknown exact Bullrun listing ticker (HTTP 404); resolve it with search_stocks or search_etfs.";
   if (status === "401" || status === "403") return `Bullrun denied this account request (HTTP ${status}); reconnect with the required shortlist scope.`;

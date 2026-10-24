@@ -9,7 +9,7 @@ const { recordMcpToolInvocation } = await import('../dist/usage/invocations.js')
 const { runWithMcpUsage } = await import('../dist/usage/context.js')
 const { runWithAuth } = await import('../dist/auth/context.js')
 const { runWithGateway } = await import('../dist/gateway/context.js')
-const { ACCOUNT_ENDPOINT, PRICING_URL } = await import('../dist/usage/allowance.js')
+const { ACCOUNT_SETUP_URL, PRICING_URL } = await import('../dist/usage/allowance.js')
 
 const originalFetch = globalThis.fetch
 let calls = []
@@ -78,23 +78,25 @@ for (const signedIn of [false, true]) {
     assert.equal(result.isError, true)
     const text = result.content[0].text
     assert.match(text, /700 successful tool calls per rolling 30 days/)
-    assert.match(text, signedIn ? /This Bullrun account/ : /This network/)
-    assert.match(text, /It starts coming back at 12:00 UTC on 20 Nov 2026 \(in about [^)]+\): each successful call counts for 30 days/)
-    assert.match(text, /Failed calls do not count toward this allowance/)
-    assert.match(text, /you can subscribe to Bullrun Pro \(CHF 5\/month or CHF 50\/year\) for higher MCP limits/)
-    assert.ok(text.includes(`See ${PRICING_URL}?utm_source=mcp&utm_medium=assistant&utm_campaign=allowance&utm_content=mcp_calls_30d for plans and limits.`))
-    assert.match(text, /Pro remains subject to fair-use and pacing limits/)
-    assert.match(text, /website remains available for free manual screening and research/)
+    assert.match(text, signedIn ? /Your Bullrun account/ : /This network/)
+    assert.match(text, /starts refilling at 12:00 UTC on 20 Nov 2026 \(in about [^)]+\)/)
+    assert.match(text, /Failed calls don't count/)
+    assert.ok(text.includes(`[Get higher limits with Bullrun Pro](${PRICING_URL}?utm_source=mcp&utm_medium=assistant&utm_campaign=allowance&utm_content=mcp_calls_30d)`))
+    assert.match(text, /CHF 5\/month or CHF 50\/year/)
+    assert.match(text, /Pro usage limits apply/)
     if (signedIn) {
-      assert.match(text, /Subscribe using the Bullrun account connected to this MCP session/)
-      assert.ok(!text.includes(ACCOUNT_ENDPOINT))
-      assert.doesNotMatch(text, /After signing up|connect that account|reconnect|trial/)
+      assert.match(text, /Upgrade the account already connected/)
+      assert.ok(!text.includes(ACCOUNT_SETUP_URL))
+      assert.doesNotMatch(text, /Connect your account|reconnect|trial/)
       assert.equal(calls[0].headers.authorization, 'Bearer test-bearer')
     } else {
-      assert.match(text, /New Bullrun accounts start with a 14-day Pro trial, no card needed/)
-      assert.ok(text.includes(`After signing up or subscribing, connect that account at ${ACCOUNT_ENDPOINT} to use its limits`))
+      assert.match(text, /New accounts.*14-day free trial, no card needed/)
+      assert.ok(text.includes(`[Connect your account](${ACCOUNT_SETUP_URL})`))
+      assert.match(text, /in your AI app to use its limits/)
+      const visible = text.replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+      assert.ok(visible.trim().split(/\s+/).length < 110, 'anonymous quota guidance stays short')
     }
-    assert.doesNotMatch(text, /data reads|unlimited|remove the .*caps/)
+    assert.doesNotMatch(text, /account\/mcp|data reads|unlimited|remove the .*caps|resets at|this month's/)
     assert.equal(calls.length, 1)
   })
 }

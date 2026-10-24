@@ -57,7 +57,11 @@ beforeEach(() => { requests = []; saved = new Map(); });
 test("personal shortlist requires identity and explicit read/write consent before any request", async () => {
   for (const [name, args] of [["list_research_shortlist", {}], ["save_research_shortlist", { tickers: ["AAPL"] }]]) {
     for (const caller of [undefined, { token: "missing-user", scopes: ["read:shortlist", "write:shortlist"] }, auth(1, ["read:market", "write:drafts"])]) {
-      assert.equal((await call(name, args, caller)).isError, true);
+      const reply = await call(name, args, caller);
+      assert.equal(reply.isError, true);
+      assert.ok(reply.content[0].text.includes("https://bull-run.org/mcp#mcp-connect"));
+      assert.ok(!reply.content[0].text.includes("https://mcp.bull-run.org/account/mcp"));
+      assert.ok(reply.content[0].text.split(/\s+/).length < 50);
     }
   }
   assert.equal((await call("save_research_shortlist", { tickers: ["AAPL"] }, auth(1, ["read:shortlist"]))).isError, true);
