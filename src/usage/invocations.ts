@@ -3,7 +3,8 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { CallToolResultSchema } from "@modelcontextprotocol/sdk/types.js";
 import { z } from "zod";
 import { bullrunPost, MCP_TOOL_REPORT_PATH } from "../bullrun.js";
-import { getMcpUsage, runWithMcpUsage, type McpReadCount } from "./context.js";
+import { getMcpUsage, runWithMcpUsage, type McpReadCount, type McpUsageContext, type McpWriteProgress } from "./context.js";
+import { capacityMessage } from "./operation.js";
 import { isProbeClient, PROBE_CLIENT_CLASS } from "./probes.js";
 import { heavyToolCallerKey, heavyToolLimitedResult, heavyToolLimiter, type HeavyToolLimiter } from "./heavyTools.js";
 import { allowanceMessage, quotaLabel } from "./allowance.js";
@@ -27,6 +28,7 @@ export interface ToolInvocation {
   rateLimited?: boolean;
   /** Which MCP allowance ran out during the call, e.g. "caller:30d". */
   quotaExhausted?: string;
+  capacityLimited?: boolean;
 }
 
 type Reporter = (event: ToolInvocation) => Promise<unknown>;
@@ -41,8 +43,10 @@ export async function recordMcpToolInvocation<T>(
   limiter: HeavyToolLimiter = heavyToolLimiter,
 ): Promise<T> {
   const reads: McpReadCount = { apiCalls: 0, meteredReads: 0 };
-  const usage = { ...getMcpUsage(), toolName, invocationId: randomUUID(),
-    clientClass: isProbeClient(client?.name) ? PROBE_CLIENT_CLASS : undefined, reads };
+  const writes: McpWriteProgress = { attempted: 0, acknowledged: 0, uncertain: false, receipts: [] };
+  const usage: McpUsageContext & { invocationId: string } = { ...getMcpUsage(), toolName, invocationId: randomUUID(),
+    lease: undefined,
+    clientClass: isProbeClient(client?.name) ? PROBE_CLIENT_CLASS : undefined, reads, writes };
   return runWithMcpUsage(usage, async () => {
     const started = Date.now();
     let outcome: ToolInvocation["outcome"] = "throw";
@@ -61,36 +65,54 @@ export async function recordMcpToolInvocation<T>(
         monthly = await reserveMonthlyAllowance(usage.invocationId);
       } catch {
         outcome = "error";
-        return monthlyUnavailableResult() as T;
+        return (reads.capacity ? capacityResult(reads) : monthlyUnavailableResult()) as T;
       }
       if (monthly && !monthly.allowed) {
         outcome = "error";
         reads.exhausted = monthly.notice;
         return monthlyLimitResult(monthly.notice!) as T;
       }
+      usage.lease = monthly?.lease;
       let result: T;
       try {
         result = await callback();
       } catch (err) {
+        if (writes.attempted) {
+          outcome = "error";
+          return interruptedWriteResult(writes) as T;
+        }
+        if (reads.capacity) {
+          outcome = "error";
+          return capacityResult(reads) as T;
+        }
         if (!reads.exhausted) throw err;
         outcome = "error";
         return allowanceResult(reads) as T;
       }
       // Once an allowance has run out, every later read fails too: one plain answer saying what
       // ran out and when it comes back beats a result full of "could not be loaded" fields.
+      if (reads.capacity) {
+        outcome = "error";
+        return (writes.attempted ? interruptedWriteResult(writes, result) : capacityResult(reads)) as T;
+      }
       if (reads.exhausted) {
         outcome = "error";
-        return allowanceResult(reads) as T;
+        return (writes.attempted ? interruptedWriteResult(writes, result) : allowanceResult(reads)) as T;
       }
       outcome = result && typeof result === "object" && "isError" in result && result.isError === true
         ? "error" : "success";
+      if (writes.uncertain || (writes.attempted && outcome === "error")) {
+        outcome = "error";
+        result = interruptedWriteResult(writes, result) as T;
+      }
       callbackSucceeded = outcome === "success";
       try {
         await finishMonthlyAllowance(monthly, outcome === "success");
         settled = true;
       } catch {
         outcome = "error";
-        return (callbackSucceeded ? uncertainSettlementResult(result) : monthlyUnavailableResult()) as T;
+        return (callbackSucceeded ? uncertainSettlementResult(result)
+          : writes.attempted ? result : monthlyUnavailableResult()) as T;
       }
       return result;
     } finally {
@@ -102,21 +124,52 @@ export async function recordMcpToolInvocation<T>(
       // the tool result or mask its exception. No arguments or result text are sent.
       // The counts are copied first: the report is itself a bullrun-api request.
       const { apiCalls, meteredReads } = reads;
+      // The completion report is outside research work and must still arrive after a refusal.
+      usage.lease = undefined;
       try {
         await reporter({
           invocationId: usage.invocationId, toolName, sessionId: usage.sessionId,
           clientName: client?.name, clientVersion: client?.version,
           outcome, durationMs: Math.max(0, Date.now() - started), apiCalls, meteredReads, rateLimited,
           quotaExhausted: reads.exhausted ? quotaLabel(reads.exhausted) : undefined,
+          capacityLimited: reads.capacity ? true : undefined,
         });
       } catch { /* analytics must never interrupt a tool */ }
     }
   });
 }
 
+function capacityResult(reads: McpReadCount) {
+  return { isError: true, content: [{ type: "text" as const, text: capacityMessage(reads.capacity!) }] };
+}
+
 function allowanceResult(reads: McpReadCount) {
   const text = allowanceMessage(reads.exhausted!, { signedIn: getAuth() !== undefined, marketplace: getGateway() !== undefined });
   return { isError: true, content: [{ type: "text" as const, text }] };
+}
+
+/** Keep partial write results and bounded acknowledgements when later work is interrupted. */
+function interruptedWriteResult(writes: McpWriteProgress, result?: unknown) {
+  const parsed = result === undefined ? undefined : CallToolResultSchema.safeParse(result);
+  const payload = parsed?.success ? parsed.data : { content: [] };
+  // Plain tool error strings can contain upstream URLs/bodies. Keep returned structured
+  // outcomes and successful partial results, and replace unstructured errors with safe guidance.
+  const content = "isError" in payload && payload.isError && !("structuredContent" in payload && payload.structuredContent)
+    ? [] : payload.content;
+  const warning = "This request did not finish. Changes may already exist in your Bullrun account. "
+    + "Review your saved items or pending drafts before retrying, and retry only changes confirmed missing. "
+    + "Do not automatically retry this operation. No tool-call unit was used.";
+  const receipts = writes.receipts.map(receipt => ({ ...receipt }));
+  return {
+    ...payload,
+    isError: true,
+    ...("structuredContent" in payload && payload.structuredContent ? {} : { structuredContent: { writeReceipts: receipts } }),
+    content: [
+      { type: "text" as const, text: warning },
+      ...content,
+      ...(receipts.length ? [{ type: "text" as const, text: `Confirmed write receipts: ${JSON.stringify(receipts)}` }] : []),
+    ],
+  };
 }
 
 /** Preserve known write outcomes when neither settlement nor its status can be confirmed. */
@@ -126,7 +179,7 @@ function uncertainSettlementResult(result: unknown) {
     content: [{ type: "text" as const, text: JSON.stringify(result) ?? String(result) }],
   };
   return { ...payload, isError: true, content: [...payload.content, { type: "text" as const, text:
-    "This tool completed, but Bullrun could not confirm its monthly usage accounting. The completed result is included above. "
+    "This tool completed, but Bullrun could not confirm its tool-call usage accounting. The completed result is included above. "
       + "A saved draft or shortlist change may already exist; review it before repeating a write. Do not automatically retry this operation." }] };
 }
 

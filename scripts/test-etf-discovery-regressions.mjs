@@ -3,7 +3,7 @@
 // these stubs verify the MCP forwards the query and preserves that ordering.
 import assert from "node:assert/strict";
 import http from "node:http";
-import { after, before, test } from "node:test";
+import { after, before, beforeEach, test } from "node:test";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
@@ -35,8 +35,23 @@ let upstream;
 let registrations;
 let requests = [];
 let truncated = false;
+let clearEtfPublicReadCache;
 
 function reply(url, body) {
+  if (url.pathname === "/api/etfs/search-summary") {
+    if (url.searchParams.get("search") === "MANY") return { body: Array.from({ length: 500 }, (_, index) => ({
+      listing: listing(`MANY-${index}`, `IE000000${String(index).padStart(4, "0")}`),
+      profile: { ticker: `MANY-${index}`, fundName: `Fund ${index}`, totalAssets: index + 1,
+        assetClassLabel: "Equity", categoryLabel: null, expenseRatio: 0.001, yieldTtm: 0.02 },
+    })) };
+    if (url.searchParams.get("search") === "NO-PROFILE") return { body: [{ listing: VUSA, profile: null }] };
+    const legacy = new URL(url);
+    legacy.pathname = "/api/etfs";
+    return { body: reply(legacy).body.map(row => ({
+      listing: row,
+      profile: reply(new URL(`/api/etfs/${encodeURIComponent(row.ticker)}/profile`, url)).body,
+    })) };
+  }
   if (url.pathname === "/api/etfs/screener") {
     const rows = SCREEN.filter(row => (!body.exchange || row.exchange === body.exchange)
       && (!body.currency || row.currency === body.currency));
@@ -85,9 +100,12 @@ before(async () => {
   const screen = await import("../dist/tools/screenEtfs.js");
   const fund = await import("../dist/tools/getEtfFund.js");
   const compare = await import("../dist/tools/compareEtfs.js");
+  ({ clearEtfPublicReadCache } = await import("../dist/tools/etfPublicReads.js"));
   registrations = [search.registerSearchEtfs, screen.registerScreenEtfs,
     fund.registerGetEtfFund, compare.registerCompareEtfs];
 });
+
+beforeEach(() => { clearEtfPublicReadCache(); requests = []; });
 
 after(async () => {
   upstream.closeAllConnections();
@@ -167,6 +185,8 @@ test("issuer-word searches and exact ticker relevance reach the MCP output uncha
   const issuer = await call("search_etfs", { search: "ZKB Gold" });
   assert.equal(requests[0].url.searchParams.get("search"), "ZKB Gold");
   assert.equal(issuer.returned, 7);
+  assert.equal(requests.length, 1, "search and all profile summaries are one bounded backend read");
+  assert.equal(requests[0].url.pathname, "/api/etfs/search-summary");
   assert.ok(issuer.results.every(row => row.issuer === "Zürcher Kantonalbank"));
   requests = [];
   const exact = await call("search_etfs", { search: "ZGLD", limit: 5 });
@@ -174,6 +194,30 @@ test("issuer-word searches and exact ticker relevance reach the MCP output uncha
   assert.equal(requests[0].url.searchParams.get("limit"), "5");
   assert.equal(exact.returned, 5);
   assert.equal(exact.results[0].ticker, "ZGLD.SW");
+});
+
+test("a maximum bounded profile scan costs one read and preserves filters, sorting and cap warnings", async () => {
+  const data = await call("search_etfs", { search: "MANY", minAum: 100, sortBy: "aum", scanLimit: 500, limit: 5 });
+  assert.equal(requests.length, 1, "500 candidates no longer trigger 500 separate profile calls");
+  assert.equal(requests[0].url.searchParams.get("limit"), "500");
+  assert.equal(data.coverage.scannedCandidates, 500);
+  assert.equal(data.coverage.profilesAvailable, 500);
+  assert.equal(data.coverage.profilesMissing, 0);
+  assert.equal(data.coverage.candidateCapReached, true);
+  assert.equal(data.matchesInScannedCandidates, 401);
+  assert.deepEqual(data.results.map(row => row.aum), [500, 499, 498, 497, 496]);
+  assert.ok(data.warnings.some(warning => /candidate cap/.test(warning)));
+  assert.equal(data.results[0].expenseRatioPct, 0.1);
+});
+
+test("a genuinely missing bundled profile keeps identity and missing-data coverage", async () => {
+  const data = await call("search_etfs", { search: "NO-PROFILE" });
+  assert.equal(data.coverage.profilesMissing, 1);
+  assert.equal(data.coverage.profilesAvailable, 0);
+  assert.equal(data.results[0].ticker, VUSA.ticker);
+  assert.equal(data.results[0].assetClass, "Equity");
+  assert.equal(data.results[0].expenseRatioPct, null);
+  assert.ok(data.warnings.some(warning => /had no profile data/.test(warning)));
 });
 
 test("an unknown comparison ticker is explicit and cannot silently look like zero", async () => {

@@ -84,6 +84,10 @@ export function allowanceMessage(notice: QuotaNotice, caller: { signedIn: boolea
   const back = whenUsageReturns(notice.resetAt, now);
   const subscribe = (signedIn: boolean) => proGuidance(signedIn, pricingLink(notice));
   if (notice.pool === "mcp_calls") {
+    if (!month && caller.signedIn && !caller.marketplace) {
+      return `You've reached your Bullrun Pro limit of ${notice.limit.toLocaleString("en-US")} successful tool calls per rolling ${span}. `
+        + `${back} Failed calls don't count.`;
+    }
     const owner = caller.marketplace ? "Your marketplace installation" : caller.signedIn ? "Your Bullrun account" : "This network";
     return `${owner} has reached its free limit of ${notice.limit.toLocaleString("en-US")} successful tool calls per rolling 30 days. `
       + `${back} Failed calls don't count. `

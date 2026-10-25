@@ -19,7 +19,8 @@ beforeEach(() => {
     const path = new URL(url).pathname
     const body = JSON.parse(options.body)
     calls.push({ path, body })
-    if (path.endsWith('/reserve')) return Response.json({ allowed: true, operationId: body.operationId })
+    if (path.endsWith('/reserve')) return Response.json({ allowed: true, operationId: body.operationId, principalKey: 'ip:test',
+      expiresAt: new Date(Date.now() + 300000).toISOString(), window: '30d', maxRequests: 1024 })
     if (path.endsWith('/finish')) {
       if (mode === 'uncertain') throw new Error('Settlement acknowledgement unavailable')
       return Response.json({ settled: true })

@@ -1,10 +1,10 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
 import {
   failureText,
-  readExactStock,
+  NOT_REQUESTED,
+  readFailure,
   settle,
   storedRead,
   type ReadFailure,
@@ -12,7 +12,13 @@ import {
   type Stock,
 } from "./stockIdentity.js";
 import { roundMetric } from "./etfAnalytics.js";
-import { etfClassification, mapWithConcurrency, toolResult, type EtfHolding, type EtfProfile } from "./etfData.js";
+import { etfClassification, toolResult, type EtfHolding } from "./etfData.js";
+import {
+  readHoldingIdentityBatch,
+  readPublicEtfHoldings,
+  readPublicEtfProfile,
+  type HoldingIdentityBatch,
+} from "./etfPublicReads.js";
 import {
   countryCurrency,
   countryName,
@@ -47,8 +53,9 @@ const outputSchema = {
   warnings: z.array(z.string()),
 };
 
-/** Most Bullrun lookups one call makes for positions the provider left unclassified. */
+/** Maximum distinct holding identities enriched in one bounded backend batch. */
 const MAX_LOOKUPS = 150;
+const BATCH_TICKER = /^[A-Z0-9^][A-Z0-9.^=_&/@ -]{0,79}$/;
 const UNCLASSIFIED = "Unclassified";
 const CASH_BUCKET = "Cash & derivatives";
 const NOT_REPORTED = "Not reported";
@@ -76,14 +83,16 @@ interface Classified {
  * instrument is found and any lookup failed, the failure is kept: the instrument
  * may exist, so the position is not "unclassified".
  */
-async function resolve(row: EtfHolding, identity: HoldingIdentity): Promise<Settled<Stock>> {
-  let failure: ReadFailure | null = null;
+function symbols(row: EtfHolding, identity: HoldingIdentity): string[] {
+  const symbol = row.holdingSymbol?.trim().toUpperCase();
+  if (!symbol || !identity.nameKey) return [];
+  return [...new Set([symbol, identity.baseSymbol].filter((value): value is string => !!value && BATCH_TICKER.test(value)))];
+}
+
+function resolve(row: EtfHolding, identity: HoldingIdentity, batch: Settled<HoldingIdentityBatch>): Settled<Stock> {
   if (identity.isin) {
-    const matches = await settle(bullrunGet<Stock[]>("/api/stocks", {
-      search: identity.isin, quoteType: "ALL", includeSecondary: true, includeInactive: true, limit: 20,
-    }));
-    failure = matches.failure;
-    const exact = (matches.data ?? []).filter((stock) => stock.isin?.toUpperCase() === identity.isin);
+    const exact = (batch.data?.isinMatches[identity.isin] ?? [])
+      .filter((stock) => stock.isin?.toUpperCase() === identity.isin);
     // One ISIN, many venues: the home-market line first (5713.T, not Duesseldorf's S19).
     const home = identity.country && identity.country !== "SUPRA" ? identity.country : identity.isin.slice(0, 2);
     const score = (stock: Stock) => (listingCountry(stock) === home ? 4 : 0)
@@ -91,20 +100,16 @@ async function resolve(row: EtfHolding, identity: HoldingIdentity): Promise<Sett
     const pick = [...exact].sort((a, b) => score(b) - score(a))[0];
     if (pick) return { data: pick, failure: null };
   }
-  const symbol = row.holdingSymbol?.trim().toUpperCase();
-  if (!symbol || !identity.nameKey) return { data: null, failure };
-  const candidates = [symbol];
-  if (identity.baseSymbol && identity.baseSymbol !== symbol) candidates.push(identity.baseSymbol);
+  const candidates = symbols(row, identity);
   for (const candidate of candidates) {
-    const read = await readExactStock(candidate);
-    failure ??= read.failure;
-    const stock = read.data;
-    if (!stock || !namesAgree(normalizeName(stock.company), identity.nameKey)) continue;
+    const stock = batch.data?.tickerMatches[candidate];
+    // A retired symbol's successor is not an exact holding match by symbol alone.
+    if (!stock || stock.ticker?.toUpperCase() !== candidate || !namesAgree(normalizeName(stock.company), identity.nameKey)) continue;
     const stockCountry = normalizeCountry(stock.country);
     if (identity.countrySource === "provider" && stockCountry && identity.country !== stockCountry) continue;
     return { data: stock, failure: null };
   }
-  return { data: null, failure };
+  return { data: null, failure: identity.isin || candidates.length ? batch.failure : null };
 }
 
 /** The bucket for a field a failed lookup left empty; null sends it to the type's own fallback. */
@@ -150,30 +155,55 @@ export function registerGetEtfExposures(server: McpServer): void {
         requirePublicScope("read:market");
         const ticker = args.ticker.trim().toUpperCase();
         const requestedTypes = [...new Set(args.types)];
-        const enc = encodeURIComponent(ticker);
+        const lookThrough = requestedTypes.some(type => ["sector", "country", "currency"].includes(type));
+        const needsProfile = lookThrough || requestedTypes.includes("asset");
         // Every look-through type is computed from the holdings, so a failed holdings read
         // is an error, never an empty fund. The profile adds only the asset class and the
         // provider's holdings count: its failure is named and the rest still answers.
         const [holdingsResult, profileRead] = await Promise.all([
-          storedRead(bullrunGet<EtfHolding[]>(`/api/etfs/${enc}/holdings`), `Holdings for ${ticker}`),
-          settle(bullrunGet<EtfProfile>(`/api/etfs/${enc}/profile`)),
+          lookThrough ? storedRead(readPublicEtfHoldings(ticker), `Holdings for ${ticker}`) : Promise.resolve(null),
+          needsProfile ? settle(readPublicEtfProfile(ticker)) : Promise.resolve(NOT_REQUESTED),
         ]);
         const holdings = holdingsResult ?? [];
         const profile = profileRead.data;
         const identities = holdings.map((row) => identify(row));
-        // Rows the provider already classified need no lookup. The rest are looked
-        // up largest first, capped: an issuer file can have thousands of lines.
+        // Only requested missing fields need enrichment. Fully provider-classified rows
+        // retain the existing country-currency fallback when no currency was reported.
         const toResolve = holdings
           .map((row, index) => ({ row, index, identity: identities[index] }))
-          .filter(({ identity }) => !identity.cash && !(identity.sector && identity.countrySource === "provider"))
+          .filter(({ row, identity }) => !identity.cash && (
+            (requestedTypes.includes("sector") && !identity.sector)
+            || (requestedTypes.includes("country") && identity.countrySource !== "provider")
+            || (requestedTypes.includes("currency") && !majorCurrency(row.currency)
+              && !(identity.sector && identity.countrySource === "provider"))
+          ))
           .sort((a, b) => (b.row.weightPct ?? 0) - (a.row.weightPct ?? 0));
-        const lookups = toResolve.slice(0, MAX_LOOKUPS);
-        const found = await mapWithConcurrency(lookups, 12, ({ row, identity }) => resolve(row, identity));
+        const key = ({ row, identity }: typeof toResolve[number]) => JSON.stringify([
+          identity.isin, symbols(row, identity), identity.nameKey, identity.country, identity.countrySource,
+        ]);
+        const canResolve = ({ row, identity }: typeof toResolve[number]) => !!identity.isin || symbols(row, identity).length > 0;
+        const distinct = new Map<string, typeof toResolve[number]>();
+        for (const holding of toResolve) if (canResolve(holding) && !distinct.has(key(holding))) distinct.set(key(holding), holding);
+        const unique = [...distinct.values()];
+        const lookups = unique.slice(0, MAX_LOOKUPS);
+        const isins = [...new Set(lookups.flatMap(({ identity }) => identity.isin ? [identity.isin] : []))];
+        const tickers = [...new Set(lookups.flatMap(({ row, identity }) => symbols(row, identity)))];
+        let batch: Settled<HoldingIdentityBatch> = { data: null, failure: null };
+        if (isins.length || tickers.length) {
+          try { batch = { data: await readHoldingIdentityBatch(isins, tickers), failure: null }; }
+          catch (error) {
+            // This endpoint always answers 200 for unknown identifiers. A 404 means
+            // the batch service is unavailable, never that every holding is unknown.
+            batch = { data: null, failure: readFailure(error) ?? "unavailable" };
+          }
+        }
+        const found = new Map(lookups.map(holding => [key(holding), resolve(holding.row, holding.identity, batch)]));
         const resolved = new Array<Stock | null>(holdings.length).fill(null);
         const lookupFailure = new Array<ReadFailure | null>(holdings.length).fill(null);
-        lookups.forEach(({ index }, position) => {
-          resolved[index] = found[position].data;
-          lookupFailure[index] = found[position].failure;
+        toResolve.forEach(holding => {
+          const read = found.get(key(holding));
+          resolved[holding.index] = read?.data ?? null;
+          lookupFailure[holding.index] = read?.failure ?? null;
         });
 
         const classified: Classified[] = holdings.map((row, index) => {
@@ -257,7 +287,7 @@ export function registerGetEtfExposures(server: McpServer): void {
 
         const lookThroughWeightPct = classified.reduce((sum, row) => sum + row.weight, 0);
         const reported = profile?.holdingsCount ?? null;
-        const isComplete = reported == null ? null : holdings.length >= reported && lookThroughWeightPct >= 98;
+        const isComplete = !lookThrough || reported == null ? null : holdings.length >= reported && lookThroughWeightPct >= 98;
         const currencyReported = weightWhere(classified, (row) => row.currencyBasis === "reported") ?? 0;
         const currencyFromListing = weightWhere(classified, (row) => row.currencyBasis === "home_listing") ?? 0;
         const currencyFromCountry = weightWhere(classified, (row) => row.currencyBasis === "country") ?? 0;
@@ -276,12 +306,13 @@ export function registerGetEtfExposures(server: McpServer): void {
             warnings.push(`${type} exposures omit ${Number(detail.totalBuckets) - Number(detail.returnedBuckets)} buckets (${detail.omittedWeightPct}% of fund weight) because of limitPerType; see coverage.bucketCoverage.`);
           }
         }
-        if (isComplete !== true) warnings.push("Holdings are partial or completeness is unknown; exposure weights are lower-bound look-through coverage, not a full fund allocation.");
+        if (lookThrough && isComplete !== true) warnings.push("Holdings are partial or completeness is unknown; exposure weights are lower-bound look-through coverage, not a full fund allocation.");
         if (requestedTypes.includes("currency") && holdings.length && currencyReported < lookThroughWeightPct * 0.9) {
           warnings.push("This fund's holdings file does not state a currency for most positions. Where it does not, the currency shown is inferred: the company's home-market listing in Bullrun, else the usual currency of its country (see coverage.currencyBasisWeightPct). This is a holding quote/listing-currency proxy, not revenue FX exposure, economic currency risk or hedge-adjusted fund exposure; a secondary line on another exchange is never used, and positions with neither basis are \"Not reported\".");
         }
-        if (toResolve.length > MAX_LOOKUPS) {
-          warnings.push(`${toResolve.length - MAX_LOOKUPS} of the smallest positions had no provider classification and were not looked up; they count as Unclassified.`);
+        const skipped = toResolve.filter(holding => canResolve(holding) && !found.has(key(holding))).length;
+        if (skipped) {
+          warnings.push(`${skipped} of the smallest positions exceeded the ${MAX_LOOKUPS} distinct-identity lookup cap and were not looked up; their missing fields remain Unclassified / Not reported.`);
         }
         if (unavailableTypes.includes("factor")) warnings.push("Factor exposure requires dedicated factor classifications or return-regression factors, which are not stored.");
         if (unavailableTypes.includes("thematic")) warnings.push("Thematic exposure requires a dedicated taxonomy/source, which is not stored.");
@@ -296,36 +327,37 @@ export function registerGetEtfExposures(server: McpServer): void {
           coverage: {
             asOfDate: holdings[0]?.asOfDate ?? null,
             source: holdings[0]?.source ?? null,
-            storedHoldingRows: holdings.length,
+            storedHoldingRows: lookThrough ? holdings.length : null,
+            holdingsLoaded: lookThrough,
             reportedHoldingsCount: reported,
-            lookThroughWeightPct: roundMetric(lookThroughWeightPct, 4),
+            lookThroughWeightPct: lookThrough ? roundMetric(lookThroughWeightPct, 4) : null,
             bucketCoverage,
-            cashAndDerivativesWeightPct: weightWhere(classified, (row) => row.cash),
+            cashAndDerivativesWeightPct: lookThrough ? weightWhere(classified, (row) => row.cash) : null,
             classifiedWeightPct: {
-              sector: weightWhere(securities, (row) => row.sector != null),
-              country: weightWhere(securities, (row) => row.country != null),
-              currency: roundMetric(currencyReported + currencyFromListing + currencyFromCountry, 4),
+              sector: lookThrough ? weightWhere(securities, (row) => row.sector != null) : null,
+              country: lookThrough ? weightWhere(securities, (row) => row.country != null) : null,
+              currency: lookThrough ? roundMetric(currencyReported + currencyFromListing + currencyFromCountry, 4) : null,
             },
             currencyBasisWeightPct: {
-              reported: currencyReported,
-              homeListing: currencyFromListing,
-              countryCurrency: currencyFromCountry,
-              notReported: weightWhere(classified, (row) => row.currency == null && !row.lookupFailed),
+              reported: lookThrough ? currencyReported : null,
+              homeListing: lookThrough ? currencyFromListing : null,
+              countryCurrency: lookThrough ? currencyFromCountry : null,
+              notReported: lookThrough ? weightWhere(classified, (row) => row.currency == null && !row.lookupFailed) : null,
             },
             // Where each classification came from, as fund weight: the provider's own
             // file, the Bullrun instrument the holding resolved to, or (country only) the
             // exchange of an aggregator's symbol. Unclassified excludes failed lookups,
             // which lookupFailures counts.
             sectorBasisWeightPct: {
-              providerReported: weightWhere(securities, (row) => row.sectorBasis === "provider"),
-              bullrunInstrument: weightWhere(securities, (row) => row.sectorBasis === "bullrun"),
-              unclassified: weightWhere(securities, (row) => row.sectorBasis == null && !row.lookupFailed),
+              providerReported: lookThrough ? weightWhere(securities, (row) => row.sectorBasis === "provider") : null,
+              bullrunInstrument: lookThrough ? weightWhere(securities, (row) => row.sectorBasis === "bullrun") : null,
+              unclassified: lookThrough ? weightWhere(securities, (row) => row.sectorBasis == null && !row.lookupFailed) : null,
             },
             countryBasisWeightPct: {
-              providerReported: weightWhere(securities, (row) => row.countryBasis === "provider"),
-              bullrunInstrument: weightWhere(securities, (row) => row.countryBasis === "bullrun"),
-              listingExchange: weightWhere(securities, (row) => row.countryBasis === "listing"),
-              unclassified: weightWhere(securities, (row) => row.countryBasis == null && !row.lookupFailed),
+              providerReported: lookThrough ? weightWhere(securities, (row) => row.countryBasis === "provider") : null,
+              bullrunInstrument: lookThrough ? weightWhere(securities, (row) => row.countryBasis === "bullrun") : null,
+              listingExchange: lookThrough ? weightWhere(securities, (row) => row.countryBasis === "listing") : null,
+              unclassified: lookThrough ? weightWhere(securities, (row) => row.countryBasis == null && !row.lookupFailed) : null,
             },
             ...(failedLookups.length
               ? {

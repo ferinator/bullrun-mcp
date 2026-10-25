@@ -12,9 +12,9 @@ const api = createServer((req, res) => {
     res.setHeader('X-Bullrun-Quota-Category', 'mcp_market')
   res.setHeader('Content-Type', 'application/json')
   // An MCP allowance that ran out, as RateLimitFilter answers it, and a website quota 429 without a pool.
-  if (req.url.startsWith('/api/spent/')) {
+  if (req.url.startsWith('/api/spent/') || req.url.startsWith('/api/screener/filter?spent=')) {
     res.statusCode = 429
-    const account = req.url.startsWith('/api/spent/account')
+    const account = req.url.startsWith('/api/spent/account') || new URL(req.url, 'http://fixture.test').searchParams.get('spent') === 'account'
     res.end(JSON.stringify({ error: 'quota_exceeded', limit: account ? 10500 : 3500,
       resetAt: '2026-11-20T10:05:00Z', window: '30d', pool: account ? 'account' : 'caller' }))
     return
@@ -145,6 +145,7 @@ test('a refused heavy call never runs, reports no reads, and says it was paced',
   assert.equal(ran, false)
   assert.equal(result.isError, true)
   assert.match(result.content[0].text, /6 calls per minute.*about 42 s/)
+  assert.match(result.content[0].text, /failed call does not use your Bullrun tool-call allowance/)
   assert.doesNotMatch(result.content[0].text, /subscrib|pricing|account\/mcp/i)
   assert.equal(events[0].outcome, 'error')
   assert.equal(events[0].rateLimited, true)
@@ -294,8 +295,8 @@ test('a run-out mid-call answers with the allowance message, however the tool ha
   }, reporter)
   for (const { run, signedIn } of [
     { run: settledTool, signedIn: false },
-    { run: throwingTool('/api/spent/screen'), signedIn: false },
-    { run: throwingTool('/api/spent/account'), signedIn: true },
+    { run: throwingTool('/api/screener/filter?spent=caller'), signedIn: false },
+    { run: throwingTool('/api/screener/filter?spent=account'), signedIn: true },
   ]) {
     const invoke = () => runWithMcpUsage({ clientIp: '203.0.113.50' }, run)
     const result = await (signedIn ? runWithAuth({ token: 't', userId: 7, scopes: [] }, invoke) : invoke())

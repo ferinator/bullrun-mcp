@@ -1,14 +1,12 @@
 import { z } from "zod";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { bullrunGet } from "../bullrun.js";
 import { requirePublicScope } from "../auth/scopes.js";
-import { settle, type Stock } from "./stockIdentity.js";
+import { failureText, readFailure } from "./stockIdentity.js";
+import { readEtfSearchSummary } from "./etfPublicReads.js";
 import {
   etfSummary,
-  mapWithConcurrency,
   pctToFraction,
   toolResult,
-  type EtfProfile,
 } from "./etfData.js";
 
 type SortBy = "relevance" | "ticker" | "name" | "aum" | "expense_ratio" | "yield";
@@ -99,7 +97,7 @@ export function registerSearchEtfs(server: McpServer): void {
         const needsBroadScan = args.minAum != null || args.minYieldTtmPct != null ||
           ["aum", "expense_ratio", "yield"].includes(args.sortBy);
         const upstreamLimit = needsBroadScan ? args.scanLimit : args.limit;
-        const candidates = await bullrunGet<Stock[]>("/api/etfs", {
+        const summaries = await readEtfSearchSummary({
           search: args.search?.trim(),
           exchange: args.exchange,
           currency: args.currency,
@@ -115,15 +113,9 @@ export function registerSearchEtfs(server: McpServer): void {
           limit: upstreamLimit,
         });
 
-        const profileReads = await mapWithConcurrency(candidates, 12, async (row) => {
-          const enc = encodeURIComponent(row.ticker);
-          return settle(bullrunGet<EtfProfile>(`/api/etfs/${enc}/profile`));
-        });
-        const profiles = profileReads.map((read) => read.data);
-        const failedProfiles = profileReads.filter((read) => read.failure).length;
-        const profileByTicker = new Map(candidates.map((row, index) => [row.ticker, profiles[index]]));
-
-        let enriched = candidates.map((row) => etfSummary(row, profileByTicker.get(row.ticker) ?? null));
+        // The bounded summary query preserves search order and bulk-loads every profile.
+        // A failed query is an error, never hundreds of apparently missing profiles.
+        let enriched = summaries.map(({ listing, profile }) => etfSummary(listing, profile));
         enriched = enriched.filter((row) => {
           const aum = typeof row.aum === "number" ? row.aum : null;
           const expense = typeof row.expenseRatioPct === "number" ? row.expenseRatioPct : null;
@@ -141,8 +133,8 @@ export function registerSearchEtfs(server: McpServer): void {
           ));
         }
 
-        const candidateCapReached = needsBroadScan && candidates.length >= args.scanLimit;
-        const missingProfiles = profiles.filter((profile) => profile == null).length - failedProfiles;
+        const candidateCapReached = needsBroadScan && summaries.length >= args.scanLimit;
+        const missingProfiles = summaries.filter(({ profile }) => profile == null).length;
         const warnings: string[] = [];
         if (candidateCapReached) {
           warnings.push(
@@ -151,9 +143,6 @@ export function registerSearchEtfs(server: McpServer): void {
         }
         if (missingProfiles > 0) {
           warnings.push(`${missingProfiles} scanned ETF(s) had no profile data; quantitative fields are null and such rows cannot pass quantitative filters.`);
-        }
-        if (failedProfiles > 0) {
-          warnings.push(`${failedProfiles} scanned ETF profile(s) could not be loaded (request quota, rate limit or outage), so their quantitative fields are null and they cannot pass quantitative filters. That is not a coverage answer; retry later.`);
         }
         if ((args.minAum != null || args.sortBy === "aum") && !args.currency) {
           warnings.push("AUM currency is not stored in the current profile schema. Use a trading-currency filter and treat cross-domicile AUM comparisons cautiously.");
@@ -178,12 +167,12 @@ export function registerSearchEtfs(server: McpServer): void {
             sortDirection: args.sortDirection,
           },
           coverage: {
-            scannedCandidates: candidates.length,
+            scannedCandidates: summaries.length,
             scanLimit: upstreamLimit,
             candidateCapReached,
             serverSideFilters: ["search", "exchange", "currency", "category", "focus", "domicile", "region", "indexKey", "distributionPolicy", "maxExpenseRatioPct"],
             clientSideFilters: ["minAum", "minYieldTtmPct"],
-            profilesAvailable: profiles.length - missingProfiles,
+            profilesAvailable: summaries.length - missingProfiles,
             profilesMissing: missingProfiles,
           },
           matchesInScannedCandidates: enriched.length,
@@ -193,7 +182,8 @@ export function registerSearchEtfs(server: McpServer): void {
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
-        return { isError: true, content: [{ type: "text", text: `search_etfs failed: ${msg}` }] };
+        return { isError: true, content: [{ type: "text", text: msg.startsWith("This tool requires the ")
+          ? msg : failureText("ETF search", readFailure(err) ?? "unavailable") }] };
       }
     },
   );

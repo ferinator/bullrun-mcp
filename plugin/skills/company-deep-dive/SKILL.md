@@ -13,7 +13,7 @@ This skill uses the Bullrun connector to research one company. It ends in a date
 - **Native currency.** Prices are in the listing's trading currency. Financials are in the company's reporting currency (`sourceCurrency`). Don't convert silently. GBX (pence) and GBP are different units.
 - **Missing means unknown.** An empty dataset, a null field, a dark risk dial or no relationship edges means Bullrun has no data. It does not mean zero risk, no news or no suppliers.
 - **Bullrun's own scores are descriptive.** The valuation gap compares the current multiple with what similar companies typically command. It is not a price target. Risk bands (Contained, Normal, Elevated, Stretched, Acute) describe measured strain. Neither is a buy or sell view.
-- **One call per tool.** Don't re-fetch what you already have; the free connection has a daily read allowance.
+- **Reuse results.** Don't re-fetch what you already have. The free connection includes 700 successful tool calls per rolling 30 days, shared by anonymous network. Each successful call counts once; failed calls use no allowance. If a temporary capacity or pacing limit asks you to wait, follow its retry guidance.
 
 ## Steps
 

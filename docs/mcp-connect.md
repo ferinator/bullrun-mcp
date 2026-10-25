@@ -18,12 +18,13 @@ guarantee that a client will offer login. Anonymous stdio is also available.
 The [MCP product page](https://bull-run.org/mcp) explains the workflows and endpoint choices.
 Free use includes **700 successful MCP tool calls per rolling 30 days**, per free account
 or anonymous network, shared across the official public, research and OAuth endpoints.
-Failed tool calls do not spend that allowance. Every feature is available on a free Bullrun
-account; signing in enables personal tools without increasing the 700-call cap. Separate
-backend read safety limits and per-tool pacing can pause use earlier, since one tool can
-perform several backend reads. Pro and active trials are outside the free call cap and retain
-fair use of 1,000 backend reads per rolling 5 hours. MCP allowances are separate from website
-quotas; website budgets are unchanged.
+Connected Pro and active-trial accounts get **1,000 successful tool calls per rolling 5 hours**.
+Each successful call counts once, regardless of how much data it loads; failed calls use no
+allowance. Every feature is available on a free Bullrun account; signing in enables personal
+tools without increasing the free account's 700-call cap. Allowances refill automatically as
+earlier calls leave the rolling window. Temporary capacity limits and tool pacing may ask you
+to wait; follow the retry guidance in the reply. MCP allowances are separate from website
+and marketplace policies, which are unchanged.
 
 > No JSON editing required for Claude — add the remote URL in the connector settings. The configs
 > below are for clients that connect via a file.

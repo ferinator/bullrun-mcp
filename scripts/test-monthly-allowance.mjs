@@ -28,7 +28,8 @@ beforeEach(() => {
     if (path.endsWith('/reserve')) {
       if (mode === 'down') throw new Error('connection failed')
       if (mode === 'spent') return Response.json({ error: 'quota_exceeded', pool: 'mcp_calls', window: '30d', limit: 700, resetAt: '2026-11-20T12:00:00Z' }, { status: 429 })
-      return Response.json({ allowed: true, exempt: mode === 'pro', operationId: body.operationId })
+      return Response.json({ allowed: true, operationId: body.operationId, principalKey: body.userId ? `user:${body.userId}` : 'ip:test',
+        expiresAt: new Date(Date.now() + 300000).toISOString(), window: mode === 'pro' ? '5h' : '30d', maxRequests: 1024 })
     }
     if (path.endsWith('/finish')) {
       finishes++
@@ -133,11 +134,12 @@ test('lost finish acknowledgements recover the durable success without losing a 
   assert.equal(calls.filter(call => call.body.success === false).length, 0)
 })
 
-test('Pro and trial exemptions are decided by the API and do not create a finish charge', async () => {
+test('Pro and trial calls also reserve and settle one successful tool unit', async () => {
   mode = 'pro'
   const result = await invoke(async () => ({ content: [] }))
   assert.equal(result.isError, undefined)
-  assert.equal(calls.length, 1)
+  assert.equal(calls.length, 2)
+  assert.equal(calls.at(-1).body.success, true)
 })
 
 test('marketplace plans use their own gateway allowance without a duplicate 700-call charge', async () => {

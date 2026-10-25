@@ -6,12 +6,13 @@
  * public endpoints simply ignore it. There is no caching.
  */
 import { getAuth } from "./auth/context.js";
-import { getMcpUsage } from "./usage/context.js";
+import { getMcpUsage, type McpWriteProgress, type McpWriteReceipt } from "./usage/context.js";
 import { getGateway } from "./gateway/context.js";
 import { gatewayHeaders } from "./gateway/mcprush.js";
 import { clientIpHeaders } from "./usage/clientIp.js";
 import { SCREEN_MAX_WAIT_MS, SCREEN_PATHS, screenGate } from "./usage/screenGate.js";
 import { parseQuotaNotice } from "./usage/allowance.js";
+import { operationHeaders, parseCapacityNotice, capacityMessage } from "./usage/operation.js";
 
 /** Where each tool call is reported (usage/invocations.ts); a refused call must still be counted. */
 export const MCP_TOOL_REPORT_PATH = "/api/analytics/mcp-tools";
@@ -76,6 +77,7 @@ export async function bullrunGet<T>(path: string, params?: QueryParams, timeoutM
     "X-Bullrun-Client": "mcp",
     ...gatewayHeaders("GET", url),
     ...clientIpHeaders("GET", url),
+    ...operationHeaders("GET", url),
   };
   const auth = getAuth();
   if (auth?.token) {
@@ -112,6 +114,8 @@ export async function bullrunGet<T>(path: string, params?: QueryParams, timeoutM
  * refused. Requests already in flight still finish.
  */
 function skipAfterRunOut(url: URL): void {
+  const capacity = getMcpUsage()?.reads?.capacity;
+  if (capacity && url.pathname !== MCP_TOOL_REPORT_PATH) throw new Error(capacityMessage(capacity));
   const exhausted = getMcpUsage()?.reads?.exhausted;
   if (exhausted && url.pathname !== MCP_TOOL_REPORT_PATH) {
     throw new Error(`Skipped bullrun-api request for ${url.pathname}: the ${exhausted.pool} ${exhausted.window} MCP allowance ran out earlier in this call`);
@@ -119,7 +123,9 @@ function skipAfterRunOut(url: URL): void {
 }
 
 function upstreamTimeout(timeoutMs?: number): number {
-  return Math.max(1, Math.min(timeoutMs ?? config.requestTimeoutMs, gatewayTimeLeft() ?? Infinity));
+  const expiresAt = getMcpUsage()?.lease?.expiresAt;
+  return Math.max(1, Math.min(timeoutMs ?? config.requestTimeoutMs, gatewayTimeLeft() ?? Infinity,
+    expiresAt === undefined ? Infinity : expiresAt - Date.now()));
 }
 
 /** The gateway deadline includes time spent in the screen queue, not just the fetch. */
@@ -149,12 +155,14 @@ export async function bullrunPost<T>(path: string, body?: unknown, timeoutMs?: n
 }
 
 async function sendPost<T>(url: URL, body: unknown, timeoutMs?: number): Promise<T> {
+  const serialized = body === undefined ? undefined : JSON.stringify(body);
   const headers: Record<string, string> = {
     Accept: "application/json",
     "Content-Type": "application/json",
     "X-Bullrun-Client": "mcp",
     ...gatewayHeaders("POST", url),
     ...clientIpHeaders("POST", url),
+    ...operationHeaders("POST", url, serialized ?? ""),
   };
   const auth = getAuth();
   if (auth?.token) {
@@ -162,28 +170,68 @@ async function sendPost<T>(url: URL, body: unknown, timeoutMs?: number): Promise
   }
   addMcpUsageHeaders(headers);
 
+  const signal = AbortSignal.timeout(upstreamTimeout(timeoutMs));
+  const writes = beginPotentialWrite(url);
   let res: Response;
   try {
     res = await fetch(url, {
       method: "POST",
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
-      signal: AbortSignal.timeout(upstreamTimeout(timeoutMs)),
+      body: serialized,
+      signal,
     });
   } catch (err) {
+    if (writes) writes.uncertain = true;
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`Failed to reach bullrun-api at ${config.apiBase} (${reason})`);
   }
   countRead(res);
 
   if (!res.ok) {
+    if (writes && res.status >= 500) writes.uncertain = true;
     const text = await res.text().catch(() => "");
     noteQuotaExhausted(res.status, text);
     const detail = text ? ` - ${text.slice(0, 300)}` : "";
     throw new Error(`bullrun-api ${res.status} ${res.statusText} for ${url.pathname}${detail}`);
   }
 
-  return (await res.json()) as T;
+  let result: T;
+  try { result = (await res.json()) as T; }
+  catch (error) {
+    if (writes) writes.uncertain = true;
+    throw error;
+  }
+  if (writes) rememberWriteReceipt(url, writes, result);
+  return result;
+}
+
+function beginPotentialWrite(url: URL): McpWriteProgress | undefined {
+  const path = url.pathname;
+  if (SCREEN_PATHS.has(path) || path === "/api/stocks/identity-batch"
+      || path === MCP_TOOL_REPORT_PATH || path.startsWith("/api/internal/mcp-allowance/")) return undefined;
+  const usage = getMcpUsage();
+  if (!usage) return undefined;
+  const writes = usage.writes ??= { attempted: 0, acknowledged: 0, uncertain: false, receipts: [] };
+  writes.attempted++;
+  return writes;
+}
+
+function rememberWriteReceipt(url: URL, writes: McpWriteProgress, result: unknown): void {
+  writes.acknowledged++;
+  if (writes.receipts.length >= 20 || !result || typeof result !== "object") return;
+  const value = result as Record<string, unknown>;
+  const kind: McpWriteReceipt["kind"] = url.pathname.startsWith("/api/short-list/") ? "shortlist"
+    : url.pathname === "/api/portfolios/ai-draft" ? "portfolio_draft_job"
+    : url.pathname === "/api/portfolios/draft-basket" ? "portfolio_draft"
+    : /^\/api\/portfolios\/[0-9]+\/position-drafts$/.test(url.pathname) ? "position_draft" : "account_change";
+  const receipt: McpWriteReceipt = { kind };
+  // Retain only validated, useful confirmation identifiers from the response. Never
+  // retain the request body, URL, token, company names, positions or portfolio contents.
+  if (typeof value.ticker === "string" && /^[A-Z0-9^][A-Z0-9.^=_&/@ -]{0,79}$/.test(value.ticker)) receipt.ticker = value.ticker;
+  if (typeof value.jobId === "string" && /^[A-Za-z0-9-]{1,100}$/.test(value.jobId)) receipt.jobId = value.jobId;
+  if (typeof value.draftId === "number" && Number.isSafeInteger(value.draftId) && value.draftId > 0) receipt.draftId = value.draftId;
+  if (receipt.ticker === undefined && receipt.jobId === undefined && receipt.draftId === undefined) return;
+  if (!writes.receipts.some(existing => JSON.stringify(existing) === JSON.stringify(receipt))) writes.receipts.push(receipt);
 }
 
 /** Per-tool-call read counts for the mcp_tool_call analytics row (usage/invocations.ts). */
@@ -201,9 +249,10 @@ function countRead(res: Response): void {
  * The error is still thrown, so tools behave as before until then.
  */
 function noteQuotaExhausted(status: number, body: string): void {
-  if (status !== 429) return;
   const reads = getMcpUsage()?.reads;
-  if (!reads || reads.exhausted) return;
+  if (!reads) return;
+  reads.capacity ??= parseCapacityNotice(status, body);
+  if (status !== 429 || reads.exhausted) return;
   reads.exhausted = parseQuotaNotice(body);
 }
 

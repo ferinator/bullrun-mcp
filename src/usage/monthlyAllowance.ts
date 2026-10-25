@@ -3,6 +3,8 @@ import { getAuth } from "../auth/context.js";
 import { getGateway } from "../gateway/context.js";
 import { getMcpUsage } from "./context.js";
 import { allowanceMessage, parseQuotaNotice, type QuotaNotice } from "./allowance.js";
+import { capacityMessage, parseCapacityNotice } from "./operation.js";
+import type { McpOperationLease } from "./context.js";
 
 const enabled = process.env.MCP_ALLOWANCE_ENABLED === "true";
 const secret = process.env.BULLRUN_MCP_GATEWAY_SECRET ?? "";
@@ -14,21 +16,35 @@ export interface MonthlyReservation {
   notice?: QuotaNotice;
   callerIp?: string;
   userId?: number;
+  lease?: McpOperationLease;
 }
 
-/** Production enables this on the first-party MCP server. Marketplace billing stays at its gateway. */
+/** One admitted call, free or Pro. Marketplace billing stays at its own gateway. */
 export async function reserveMonthlyAllowance(operationId: string): Promise<MonthlyReservation | undefined> {
   if (!enabled || getGateway()) return undefined;
   const response = await control("reserve", operationId);
+  const capacity = parseCapacityNotice(response.status, response.text);
+  if (capacity) {
+    const reads = getMcpUsage()?.reads;
+    if (reads) reads.capacity = capacity;
+    throw new Error(capacityMessage(capacity));
+  }
   if (response.status === 429) {
     const notice = parseQuotaNotice(response.text);
     if (!notice || notice.pool !== "mcp_calls") throw new Error("Invalid monthly allowance response");
     return { operationId, allowed: false, notice };
   }
   const payload = JSON.parse(response.text);
-  if (!response.ok || payload.allowed !== true) throw new Error("Monthly allowance is unavailable");
-  return { operationId, allowed: true, exempt: payload.exempt === true,
-    callerIp: getMcpUsage()?.clientIp, userId: getAuth()?.userId };
+  const expiresAt = Date.parse(payload.expiresAt);
+  const toolName = getMcpUsage()?.toolName;
+  if (!response.ok || payload.allowed !== true || payload.operationId !== operationId
+      || typeof payload.principalKey !== "string" || !/^[a-zA-Z0-9:_-]{1,180}$/.test(payload.principalKey)
+      || !Number.isFinite(expiresAt) || expiresAt <= Date.now() || expiresAt > Date.now() + 10 * 60_000
+      || !Number.isInteger(payload.maxRequests) || payload.maxRequests < 1 || payload.maxRequests > 4096
+      || !toolName) throw new Error("Research allowance is unavailable");
+  return { operationId, allowed: true, callerIp: getMcpUsage()?.clientIp, userId: getAuth()?.userId,
+    lease: { operationId, principalKey: payload.principalKey, toolName, expiresAt,
+      maxRequests: payload.maxRequests, attemptedRequests: 0 } };
 }
 
 export async function finishMonthlyAllowance(reservation: MonthlyReservation | undefined, success: boolean): Promise<void> {
@@ -57,7 +73,8 @@ async function control(action: "reserve" | "finish" | "status", operationId: str
   if (Buffer.byteLength(secret, "utf8") < 32) throw new Error("Monthly allowance signing is not configured");
   const auth = getAuth();
   const body = JSON.stringify({ operationId, callerIp: identity ? identity.callerIp : getMcpUsage()?.clientIp,
-    userId: identity ? identity.userId : auth?.userId, success });
+    userId: identity ? identity.userId : auth?.userId, success,
+    ...(action === "reserve" ? { toolName: getMcpUsage()?.toolName } : {}) });
   const url = new URL(`/api/internal/mcp-allowance/${action}`, process.env.BULLRUN_API_BASE ?? "http://localhost:8085");
   const timestamp = String(Math.floor(Date.now() / 1000));
   const digest = createHash("sha256").update(body).digest("hex");
@@ -78,5 +95,5 @@ export function monthlyLimitResult(notice: QuotaNotice) {
 
 export function monthlyUnavailableResult() {
   return { isError: true, content: [{ type: "text", text:
-    "Bullrun could not confirm the MCP monthly allowance. Please retry shortly. This is not a coverage answer." }] };
+    "Bullrun could not confirm your research allowance. Please retry shortly." }] };
 }

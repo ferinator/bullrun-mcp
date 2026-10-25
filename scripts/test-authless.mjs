@@ -189,12 +189,26 @@ const riskBoardHits = { count: 0, lastQuery: null };
 const mlBoardQueries = [];
 const mlSummaryQueries = [];
 
-const apiServer = http.createServer((req, res) => {
+const apiServer = http.createServer(async (req, res) => {
   const requestUrl = new URL(req.url ?? "/", "http://127.0.0.1");
   const json = (body) => {
     res.writeHead(200, { "content-type": "application/json" });
     res.end(JSON.stringify(body));
   };
+  if (requestUrl.pathname === "/api/stocks/identity-batch") {
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const input = JSON.parse(Buffer.concat(chunks).toString());
+    return json({
+      isinMatches: Object.fromEntries(input.isins.map(isin => [isin, Object.values(holdingStocks).filter(row => row.isin === isin)])),
+      tickerMatches: Object.fromEntries(input.tickers.map(ticker => [ticker, holdingStocks[ticker] ?? null])),
+    });
+  }
+  if (requestUrl.pathname === "/api/etfs/search-summary") {
+    const search = (requestUrl.searchParams.get("search") ?? "").toUpperCase();
+    const rows = search ? etfRows.filter(row => row.ticker === search || row.company.toUpperCase().includes(search)) : etfRows;
+    return json(rows.map(listing => ({ listing, profile: etfProfiles[listing.ticker] ?? null })));
+  }
   const ci = "/api/company-intelligence";
   if (requestUrl.pathname === `${ci}/V/risk-preview`) return json(riskPreviewV);
   if (requestUrl.pathname === `${ci}/V/risk-profile`) return json(riskProfileV);

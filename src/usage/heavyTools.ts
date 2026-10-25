@@ -4,8 +4,8 @@ import { getMcpUsage } from "./context.js";
 
 /**
  * Per-minute limit on the tools that cost the API the most per call: the two screens scan the
- * whole universe (several seconds each on prod) and get_etf_exposures can fan out into ~150
- * lookups. The daily quota bounds a caller's total; this stops one caller firing a burst of them
+ * whole universe (several seconds each on prod). The successful-tool allowance bounds a
+ * caller's total; this stops one caller firing a burst of expensive requests
  * in parallel. Counted per caller and per tool, in this process (one MCP container).
  */
 export const HEAVY_TOOLS = new Set([
@@ -80,9 +80,8 @@ export function heavyToolLimitedResult(toolName: string, perMinute: number, retr
     isError: true,
     content: [{
       type: "text" as const,
-      text: `${toolName} is limited to ${perMinute} calls per minute per caller across connections, and that limit was reached. `
-        + `Retry in about ${retryAfterSeconds} s. This is a pacing limit, not a quota or a coverage answer; `
-        + "narrow the request or reuse the previous result in the meantime.",
+      text: `You've reached the ${perMinute} calls per minute limit for ${toolName}. `
+        + `Try again in about ${retryAfterSeconds} seconds. This failed call does not use your Bullrun tool-call allowance.`,
     }],
   };
 }

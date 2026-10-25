@@ -31,7 +31,7 @@ Claude loads the matching skill from your request. In Claude Code you can also r
 
 ## Connection
 
-The plugin declares one remote MCP server, `https://mcp.bull-run.org/research/mcp`. It serves Bullrun's 39 read-only research tools and needs no account, API key or sign-in. Each caller gets a free daily allowance of reads; one tool call can use several reads. This plugin has no portfolio, shortlist or other account tools, and it never writes anything.
+The plugin declares one remote MCP server, `https://mcp.bull-run.org/research/mcp`. It serves Bullrun's 39 read-only research tools and needs no account, API key or sign-in. Free use includes 700 successful tool calls per rolling 30 days, shared across official Bullrun connections by anonymous network. Each successful call counts once regardless of internal data reads; failed calls use no allowance. Temporary capacity limits and tool pacing may ask you to wait; follow the reply's retry guidance. This plugin has no portfolio, shortlist or other account tools, and it never writes anything. To use the Pro or active-trial allowance of 1,000 successful tool calls per rolling 5 hours, connect your account separately using the [setup guide](https://bull-run.org/mcp#mcp-connect).
 
 ## Data and privacy
 

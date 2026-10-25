@@ -12,6 +12,39 @@ export interface McpUsageContext {
   clientIp?: string;
   /** Backend requests made by one tool call, counted by bullrunGet/bullrunPost. */
   reads?: McpReadCount;
+  /** API-admitted, principal-bound tool operation; internal reads do not spend customer units. */
+  lease?: McpOperationLease;
+  /** Private request-local write progress. Never report it to analytics or a shared cache. */
+  writes?: McpWriteProgress;
+}
+
+export interface McpWriteReceipt {
+  kind: "shortlist" | "portfolio_draft_job" | "portfolio_draft" | "position_draft" | "account_change";
+  ticker?: string;
+  jobId?: string;
+  draftId?: number;
+}
+
+export interface McpWriteProgress {
+  attempted: number;
+  acknowledged: number;
+  uncertain: boolean;
+  /** At most 20 compact response identifiers; no request arguments or personal payloads. */
+  receipts: McpWriteReceipt[];
+}
+
+export interface McpOperationLease {
+  operationId: string;
+  principalKey: string;
+  toolName: string;
+  expiresAt: number;
+  maxRequests: number;
+  attemptedRequests: number;
+}
+
+export interface McpCapacityNotice {
+  reason: string;
+  retryAfterSeconds: number;
 }
 
 export interface McpReadCount {
@@ -21,6 +54,8 @@ export interface McpReadCount {
   meteredReads: number;
   /** Set by the first read the API refused because an MCP allowance ran out (usage/allowance.ts). */
   exhausted?: QuotaNotice;
+  /** Resource/attempt protection is separate from the customer's successful-call allowance. */
+  capacity?: McpCapacityNotice;
 }
 
 const storage = new AsyncLocalStorage<McpUsageContext>();

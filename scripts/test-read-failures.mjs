@@ -35,8 +35,13 @@ let upstream;
 let failures = [];
 let requests = [];
 
-function respond(url) {
+function respond(url, input) {
   const path = url.pathname;
+  if (path === "/api/stocks/identity-batch") return [200, {
+    isinMatches: Object.fromEntries(input.isins.map(isin => [isin, isin === TSLA.isin ? [TSLA] : []])),
+    tickerMatches: Object.fromEntries(input.tickers.map(ticker => [ticker, ticker === "TSLA" ? TSLA : null])),
+  }];
+  if (path === "/api/etfs/search-summary") return [200, [{ listing: VWRL, profile: respond(new URL("/api/etfs/VWRL/profile", url))[1] }]];
   if (path === "/api/stocks/TSLA") return [200, TSLA];
   if (path === "/api/stocks/NEWCO") return [200, NEWCO];
   if (path === "/api/stocks") return [200, url.searchParams.get("search") === TSLA.isin ? [TSLA] : []];
@@ -68,14 +73,17 @@ function respond(url) {
 }
 
 before(async () => {
-  upstream = http.createServer((req, res) => {
+  upstream = http.createServer(async (req, res) => {
     const url = new URL(req.url, "http://stub");
+    const chunks = [];
+    for await (const chunk of req) chunks.push(chunk);
+    const input = chunks.length ? JSON.parse(Buffer.concat(chunks).toString()) : null;
     requests.push(url);
     // A pattern can also name the query (search=<ISIN>) to fail one lookup among many.
     const failure = failures.find(([pattern]) => pattern.test(url.pathname) || pattern.test(url.pathname + url.search));
     const [status, body] = failure
       ? [failure[1], failure[1] === 429 ? { error: "quota_exceeded" } : { error: "upstream-secret at private.internal" }]
-      : respond(url);
+      : respond(url, input);
     res.writeHead(status, { "content-type": "application/json" });
     res.end(JSON.stringify(body));
   });
@@ -100,6 +108,7 @@ const TOOL_MODULES = [
 async function call(name, args, failing = []) {
   failures = failing;
   requests = [];
+  (await import("../dist/tools/etfPublicReads.js")).clearEtfPublicReadCache();
   const server = new McpServer({ name: "read-failures-test", version: "1" });
   for (const [file, register] of TOOL_MODULES) (await import(`../dist/tools/${file}.js`))[register](server);
   const client = new Client({ name: "read-failures-client", version: "1" });
@@ -206,10 +215,11 @@ test("ETF risk, time series and cost tools name failed price and profile reads",
   assert.doesNotMatch(cost.text, /No expense ratio is stored/);
 });
 
-test("search_etfs counts failed profile reads apart from missing profiles", async () => {
-  const { data } = await call("search_etfs", { search: "VWRL" }, [[/\/profile$/, 429]]);
-  assert.ok(data.warnings.some((warning) => /1 scanned ETF profile\(s\) could not be loaded/.test(warning)));
-  assert.ok(!data.warnings.some((warning) => /had no profile data/.test(warning)));
+test("search_etfs reports a failed summary query as an error, never missing profiles", async () => {
+  const { result, text, all } = await call("search_etfs", { search: "VWRL" }, [[/\/search-summary$/, 429]]);
+  assert.equal(result.isError, true);
+  assert.match(text, /ETF search could not be loaded: .*HTTP 429.*not a coverage answer/);
+  assert.doesNotMatch(all, /had no profile data|quota_exceeded|127\.0\.0\.1/);
 });
 
 test("readExactStock keeps a failed lookup apart from no such listing", async () => {
@@ -260,23 +270,23 @@ test("get_stock_metrics: every read failing is an error, and a listing with noth
 const LOOKUP_FAILED = "Not loaded (lookup failed)";
 const bucket = (rows, name) => rows.find((row) => row.name === name)?.weightPct ?? null;
 
-test("get_etf_exposures: weight whose lookup failed is reported as not loaded, apart from genuinely unclassified weight", async () => {
-  const { result, data, all } = await call("get_etf_exposures", { ticker: "VWRL" }, [[new RegExp(`search=${AAPL_ISIN}`), 429]]);
+test("get_etf_exposures: a failed identity batch reports all unresolved weight as not loaded", async () => {
+  const { result, data, all } = await call("get_etf_exposures", { ticker: "VWRL" }, [[/\/identity-batch$/, 429]]);
   assert.equal(result.isError, undefined);
-  for (const type of ["sector", "country", "currency"]) {
-    assert.equal(bucket(data.exposures[type], LOOKUP_FAILED), 20, `${type}: Apple's failed lookup`);
-  }
-  assert.equal(bucket(data.exposures.sector, "Unclassified"), 10, "only the line with no Bullrun instrument");
-  assert.equal(bucket(data.exposures.country, "Unclassified"), 10);
+  assert.equal(bucket(data.exposures.sector, LOOKUP_FAILED), 60);
+  assert.equal(bucket(data.exposures.country, LOOKUP_FAILED), 60);
+  assert.equal(bucket(data.exposures.currency, LOOKUP_FAILED), 50, "the reported GBP remains known");
+  assert.equal(bucket(data.exposures.sector, "Unclassified"), null);
+  assert.equal(bucket(data.exposures.country, "Unclassified"), null);
   assert.equal(bucket(data.exposures.currency, "Not reported"), null);
   assert.deepEqual(data.coverage.lookupFailures, {
-    positions: 1, weightPct: 20, notLoadedWeightPct: { sector: 20, country: 20, currency: 20 },
+    positions: 3, weightPct: 60, notLoadedWeightPct: { sector: 60, country: 60, currency: 50 },
   });
-  assert.equal(data.coverage.sectorBasisWeightPct.unclassified, 10);
-  assert.equal(data.coverage.sectorBasisWeightPct.bullrunInstrument, 30, "Tesla still resolved by ISIN");
-  assert.equal(data.coverage.countryBasisWeightPct.unclassified, 10);
+  assert.equal(data.coverage.sectorBasisWeightPct.unclassified, 0);
+  assert.equal(data.coverage.sectorBasisWeightPct.providerReported, 40, "provider classifications need no identity query");
+  assert.equal(data.coverage.countryBasisWeightPct.unclassified, 0);
   assert.ok(data.warnings.some((warning) =>
-    /^The Bullrun classification of 1 position\(s\) \(20% of fund weight\) could not be loaded: .*HTTP 429.*not a coverage answer/.test(warning)));
+    /^The Bullrun classification of 3 position\(s\) \(60% of fund weight\) could not be loaded: .*HTTP 429.*not a coverage answer/.test(warning)));
   assert.doesNotMatch(all, /quota_exceeded|127\.0\.0\.1/);
 
   const healthy = await call("get_etf_exposures", { ticker: "VWRL" });
