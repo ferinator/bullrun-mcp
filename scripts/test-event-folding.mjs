@@ -177,6 +177,52 @@ test("a folded investigation cannot bridge two different subjects", () => {
   assert.strictEqual(folded[1].event, input[2]);
 });
 
+test("probes, investigations and inquiries are investigation headlines too", () => {
+  for (const headline of ["NHTSA probes Tesla's Cybercab", "Tesla Cybercab faces two investigations", "Tesla Cybercab inquiries widen"]) {
+    const input = [
+      ev("RECALL_SAFETY", "Tesla's Cybercab is already under investigation", null),
+      ev("REGULATORY_LEGAL", headline, null),
+    ];
+    assert.equal(foldDuplicateEvents(input, "Tesla, Inc.").length, 1, headline);
+  }
+});
+
+// Production rows for APP and CPNG, 2026-10-28. A law firm's notice and a news story
+// about a different probe of the same company share boilerplate ("investors",
+// "securities", "South Korea") but no subject: neither report covers half of the
+// topical words in the other's headline.
+const permutations = (rows) => rows.length <= 1 ? [rows]
+  : rows.flatMap((row, i) => permutations([...rows.slice(0, i), ...rows.slice(i + 1)]).map((rest) => [row, ...rest]));
+
+test("a law firm's notice does not join a news story about another probe", () => {
+  const app = [
+    ev("REGULATORY_LEGAL", "Rosen Law Firm Encourages MarineMax, Inc. Investors to Inquire About Securities Class Action Investigation – HZO - Business Wire",
+      "# **Rosen Law Firm Encourages MarineMax, Inc. Investors to Inquire About Securities Class Action Investigation – HZO** NEW YORK--(BUSINESS WIRE)--Why:Rosen Law Firm, a global investor rights law firm, announces an investigation of potential securities claims on behalf of shareholders of MarineMax, Inc. ## Rosen Law Firm Encourages Tvardi Therapeutics, Inc. Investors to Inquire About Securities Class Action Investigation – TVRD NEW YORK--(BUSINESS WIRE)--Why: Rosen Law Firm, a global investor rights law firm, announces an investigation of potential securities claims on behalf of shareholders of Tvardi Therapeutics, Inc. NEW YORK--(BUSINESS WIRE)--Why: Rosen Law Firm, a global investor rights ",
+      "2026-09-15T08:59:05.136974Z"),
+    ev("REGULATORY_LEGAL", "Rosen Law Firm Encourages Jefferies Financial Group Inc. Investors to Inquire About Securities Class Action Investigation – JEF - Business Wire",
+      "# **Rosen Law Firm Encourages Jefferies Financial Group Inc. Investors to Inquire About Securities Class Action Investigation – JEF** NEW YORK--(BUSINESS WIRE)--Why: Rosen Law Firm, a global investor rights law firm, announces an investigation of potential securities claims on behalf of shareholders of AppLovin Corporation (NASDAQ: APP) resulting from allegations that AppLovin may have issued materially misleading business information to the investing public. NEW YORK--(BUSINESS WIRE)--Why: Rosen Law Firm, a global investor rights law firm, announces an investigation of potential securities claims on behalf of shareholders of Trinseo PLC (NYSE: TSE) resulting from allegations that Trinseo ma",
+      "2026-09-15T08:59:05.135775Z"),
+    ev("REGULATORY_LEGAL", "Applovin stock tumbles after report of SEC probe into data practices - Investing.com",
+      "Stock Markets Investing.com -- Applovin (NASDAQ:APP) shares fell 18% Monday afternoon following a Bloomberg report that the mobile advertising technology company is under investigation by the Securities and Exchange Commission regarding its data-collection practices. The significant stock drop highlights investor concerns about potential regulatory challenges facing the mobile advertising technology provider, which has become a major player in the app monetization and marketing space. 1M 6M Stock market today: S&P 500 hits another closing record as AMD leads tech rally | APP | 587.00 | -14.03% | 14.42M | | ARE | 79.99 | -4.55% | 2.21M | | T | 25.87 | -4.40% | 63.47M |",
+      "2026-09-15T08:59:05.134579Z"),
+  ];
+  const coupang = [
+    ev("REGULATORY_LEGAL", "Coupang investors seek US probe over South Korea's handling of data leak - Reuters",
+      "By Hyunjoo Jin and Krystal Hu. SAN FRANCSICO/SEOUL, Jan 22 (Reuters) - Two major U.S. investors in Coupang Inc (CPNG.N), opens new tab said on Thursday they have petitioned the U.S. government to investigate the South Korean government and potentially impose trade remedies over what they describe as discriminatory treatment of the e-commerce company. Tech investors Greenoaks and Altimeter said they have also filed arbitration claims against South Korea under the U.S.–Korea Free Trade Agreement (KORUS), accusing Seoul of mounting a campaign against Coupang following a consumer data breach that has caused billions of dollars in losses for investors. The move comes after Coupang reported in N",
+      "2026-09-05T11:37:37.089095Z"),
+    ev("REGULATORY_LEGAL", "Kaplan Fox Announces an Investigation Into Coupang, Inc. (CPNG) for Potential Securities Law Violations - Markets Financial Content",
+      "# Kaplan Fox Announces an Investigation Into Coupang, Inc. NEW YORK, NY - December 13, 2025 (NEWMEDIAWIRE) - Kaplan Fox & Kilsheimer LLP is investigating potential securities violations against Coupang, Inc. On November 20, 2025, *Yonhap News*, a South Korean news agency, published an article stating that Coupang reported to the government “a data leakage incident that exposed the personal information of about 4,500 customers.”. Following this news, the price of Coupang stock fell $0.84 per share, approximately 3%, to close at $26.56 per share. Then, on November 29, 2025, *Yonhap News* reported that Coupang “confirmed personal information from 33.7 million customer accounts was exposed, far ",
+      "2026-09-05T11:37:37.087415Z"),
+  ];
+  for (const [rows, company, story] of [[app, "Applovin Corp - Class A", /SEC probe/], [coupang, "Coupang Inc - Class A", /seek US probe/]]) {
+    for (const input of permutations(rows)) {
+      const folded = foldDuplicateEvents(input, company);
+      const members = folded.find((f) => [f.event, ...f.alsoReportedAs].some((r) => story.test(r.headline)));
+      assert.equal(members.alsoReportedAs.length, 0, `${company}: ${input.map((e) => e.headline.slice(0, 30)).join(" / ")}`);
+    }
+  }
+});
+
 test("a shared subject and non-investigation kind do not merge independent actions", () => {
   const pairs = [
     [ev("RESTRUCTURING", "Tesla Austin layoffs", "Engineers dismissed"),

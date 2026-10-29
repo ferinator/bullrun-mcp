@@ -147,7 +147,7 @@ export async function readExactStock(ticker: string): Promise<Settled<Stock>> {
  * symbol, while Asian listings keep their exchange suffix.
  */
 export const TICKER_CONVENTION =
-  "Bullrun tickers: US and most European listings use the plain local symbol (AAPL, BMW, NESN, ABBN); most Asian and Indian listings keep their exchange suffix (Tokyo 6324.T, Hong Kong 0700.HK, Shanghai 600519.SS, Shenzhen 000001.SZ, Taiwan 2330.TW, Korea 000100.KS, Singapore D05.SI, India RELIANCE.NS), but some Japanese and Korean large caps are plain codes (Toyota 7203, Samsung 005930). Either form is resolved automatically when exactly one listing matches; use search_stocks to find a ticker by company name or ISIN.";
+  "Use the listing ticker returned by search_stocks. US/European examples: AAPL, BMW, NESN. Most Asian listings keep their exchange suffix (6324.T, 0700.HK); some use bare codes (005930). Native or suffixed forms resolve only when one listing matches; search by company name or ISIN if unsure.";
 
 export interface TickerResolution {
   /** The Bullrun ticker to use, or null when none or several listings match. */

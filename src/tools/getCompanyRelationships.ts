@@ -83,7 +83,7 @@ const inputSchema = {
   verifiedOnly: z.boolean().default(false)
     .describe("true = only edges confirmed against a primary source (filing, company release). false also returns search-suggested edges, each labelled with its status and confidence."),
   evidence: z.enum(["none", "sources", "excerpts"]).default("sources")
-    .describe("none = counts only; sources = source title/URL/type per edge; excerpts = also the quoted evidence text."),
+    .describe("none = omit evidence sources, keeping counterparties, measurements and evidence counts; sources = source title/URL/type per edge; excerpts = also quoted evidence text."),
   limitPerRole: z.number().int().min(1).max(100).default(25)
     .describe("Max counterparties per role, verified and highest-confidence first."),
 };

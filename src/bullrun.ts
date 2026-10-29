@@ -92,6 +92,7 @@ export async function bullrunGet<T>(path: string, params?: QueryParams, timeoutM
       signal: AbortSignal.timeout(upstreamTimeout(timeoutMs)),
     });
   } catch (err) {
+    noteUpstreamFailure();
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`Failed to reach bullrun-api at ${config.apiBase} (${reason})`);
   }
@@ -100,11 +101,16 @@ export async function bullrunGet<T>(path: string, params?: QueryParams, timeoutM
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     noteQuotaExhausted(res.status, body);
+    noteUpstreamFailure(res.status, body);
     const detail = body ? ` - ${body.slice(0, 300)}` : "";
     throw new Error(`bullrun-api ${res.status} ${res.statusText} for ${url.pathname}${url.search}${detail}`);
   }
 
-  return (await res.json()) as T;
+  try { return (await res.json()) as T; }
+  catch (error) {
+    noteUpstreamFailure();
+    throw error;
+  }
 }
 
 /**
@@ -134,6 +140,7 @@ function gatewayTimeLeft(): number | undefined {
   if (deadline === undefined) return undefined;
   const remaining = deadline - Date.now();
   if (remaining <= 0) {
+    noteUpstreamFailure();
     throw new Error("Marketplace research deadline reached. Request fewer rows, modules or periods, or retry later.");
   }
   return remaining;
@@ -148,10 +155,17 @@ function gatewayTimeLeft(): number | undefined {
 export async function bullrunPost<T>(path: string, body?: unknown, timeoutMs?: number): Promise<T> {
   const url = new URL(path.startsWith("/") ? path : `/${path}`, config.apiBase);
   skipAfterRunOut(url);
+  if (!SCREEN_PATHS.has(url.pathname)) return sendPost<T>(url, body, timeoutMs);
   // Whole-universe screens queue for one of a few slots; see usage/screenGate.ts.
-  return SCREEN_PATHS.has(url.pathname)
-    ? screenGate.run(() => sendPost<T>(url, body, timeoutMs), Math.min(SCREEN_MAX_WAIT_MS, gatewayTimeLeft() ?? Infinity))
-    : sendPost<T>(url, body, timeoutMs);
+  const maxWaitMs = Math.min(SCREEN_MAX_WAIT_MS, gatewayTimeLeft() ?? Infinity);
+  let started = false;
+  try {
+    return await screenGate.run(() => { started = true; return sendPost<T>(url, body, timeoutMs); }, maxWaitMs);
+  } catch (err) {
+    // A screen that never got a slot was turned away because Bullrun was busy, not for what the caller sent.
+    if (!started) noteBusy();
+    throw err;
+  }
 }
 
 async function sendPost<T>(url: URL, body: unknown, timeoutMs?: number): Promise<T> {
@@ -182,6 +196,7 @@ async function sendPost<T>(url: URL, body: unknown, timeoutMs?: number): Promise
     });
   } catch (err) {
     if (writes) writes.uncertain = true;
+    noteUpstreamFailure();
     const reason = err instanceof Error ? err.message : String(err);
     throw new Error(`Failed to reach bullrun-api at ${config.apiBase} (${reason})`);
   }
@@ -191,6 +206,7 @@ async function sendPost<T>(url: URL, body: unknown, timeoutMs?: number): Promise
     if (writes && res.status >= 500) writes.uncertain = true;
     const text = await res.text().catch(() => "");
     noteQuotaExhausted(res.status, text);
+    noteUpstreamFailure(res.status, text);
     const detail = text ? ` - ${text.slice(0, 300)}` : "";
     throw new Error(`bullrun-api ${res.status} ${res.statusText} for ${url.pathname}${detail}`);
   }
@@ -199,6 +215,7 @@ async function sendPost<T>(url: URL, body: unknown, timeoutMs?: number): Promise
   try { result = (await res.json()) as T; }
   catch (error) {
     if (writes) writes.uncertain = true;
+    noteUpstreamFailure();
     throw error;
   }
   if (writes) rememberWriteReceipt(url, writes, result);
@@ -254,6 +271,29 @@ function noteQuotaExhausted(status: number, body: string): void {
   reads.capacity ??= parseCapacityNotice(status, body);
   if (status !== 429 || reads.exhausted) return;
   reads.exhausted = parseQuotaNotice(body);
+}
+
+/**
+ * Remembers on the tool call that Bullrun, not the caller, stopped a request, so usage/invocations.ts
+ * files a failed call as a limit refusal or a tool error rather than a caller error. No status means
+ * the request got no usable answer: unreachable, timed out, past its deadline or unreadable JSON.
+ */
+function noteUpstreamFailure(status?: number, body = ""): void {
+  if (status !== undefined && status < 500) return;
+  if (status === 503 && isServerBusy(body)) return noteBusy();
+  const reads = getMcpUsage()?.reads;
+  if (reads) reads.upstreamFailed = true;
+}
+
+function noteBusy(): void {
+  const reads = getMcpUsage()?.reads;
+  if (reads) reads.busy = true;
+}
+
+/** bullrun-api's ScreenerBusyHandler (and the AI endpoints) answer an overload with this body. */
+function isServerBusy(body: string): boolean {
+  try { return (JSON.parse(body) as Record<string, unknown>).error === "server_busy"; }
+  catch { return false; }
 }
 
 function addMcpUsageHeaders(headers: Record<string, string>): void {

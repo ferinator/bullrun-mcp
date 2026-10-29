@@ -3,7 +3,10 @@ import cors from "cors";
 import { randomUUID } from "node:crypto";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
+import { createMcpHandler, isLegacyRequest } from "@modelcontextprotocol/server";
+import { toNodeHandler, toWebRequest } from "@modelcontextprotocol/node";
 import { createMcpServer } from "./mcpServer.js";
+import { createModernMcpServer } from "./sdkV2.js";
 import { config } from "./bullrun.js";
 import { runWithAuth } from "./auth/context.js";
 import { runWithMcpUsage, type McpUsageContext } from "./usage/context.js";
@@ -20,8 +23,8 @@ app.use(
     // browser-based clients (e.g. the MCP Inspector) connect directly; WWW-Authenticate
     // is exposed so they can read the OAuth challenge.
     origin: "*",
-    exposedHeaders: ["Mcp-Session-Id", "WWW-Authenticate"],
-    allowedHeaders: ["Content-Type", "Mcp-Session-Id", "Mcp-Protocol-Version", "Accept", "Authorization"],
+    exposedHeaders: ["Mcp-Session-Id", "Mcp-Protocol-Version", "WWW-Authenticate"],
+    allowedHeaders: ["Content-Type", "Mcp-Session-Id", "Mcp-Protocol-Version", "Mcp-Method", "Mcp-Param-Name", "Accept", "Authorization"],
   }),
 );
 
@@ -50,6 +53,7 @@ app.get("/health", (_req: Request, res: Response) => {
   res.json({
     status: "ok",
     service: "bullrun-mcp",
+    protocolVersions: ["2026-07-28", "2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05", "2024-10-07"],
     apiBase: config.apiBase,
     auth: {
       required: config.requireAuth,
@@ -150,6 +154,33 @@ app.use(LEGACY_MCP_PATH, authGate("configured"));
 app.use(LEGACY_AUTH_MCP_PATH, authGate("required"));
 app.use(RESEARCH_MCP_PATH, authGate("optional"));
 app.use(MCPRUSH_PATH, mcprushGate);
+
+/**
+ * Current MCP exchanges are stateless and self-identifying. The official v2
+ * classifier keeps malformed modern claims on the modern validation path;
+ * claim-less traffic continues through the existing sessionful v1 transport.
+ * Auth and usage contexts wrap both paths on every request, never per session.
+ */
+const modernHandlers = new Map<string, ReturnType<typeof toNodeHandler>>();
+async function routeMcpRequest(req: Request, res: Response, legacy: () => Promise<void>): Promise<void> {
+  const request = await toWebRequest(req, req.body);
+  if (await isLegacyRequest(request, req.body)) {
+    await legacy();
+    return;
+  }
+  const catalog = catalogFor(req);
+  const marketplace = gatewaySessionOwner() !== undefined;
+  const key = marketplace ? "marketplace" : catalog;
+  let handler = modernHandlers.get(key);
+  if (!handler) {
+    handler = toNodeHandler(createMcpHandler(() => createModernMcpServer({
+      researchOnly: catalog === "research", marketplace, legacyTools: catalog === "legacy",
+    }), { legacy: "reject", maxRequestBodySize: 1024 * 1024,
+      onerror: error => console.error("MCP modern request error:", error.message) }));
+    modernHandlers.set(key, handler);
+  }
+  await runWithMcpUsage(mcpUsageFromRequest(req), () => handler(req, res, req.body));
+}
 
 /** Emit a 401 with the RFC 9728 challenge pointing at our Protected Resource Metadata. */
 function respondChallenge(res: Response, error?: { code: string; description: string }): void {
@@ -303,12 +334,13 @@ async function handleMcpPost(req: Request, res: Response): Promise<void> {
 // Bind the shared POST handler to both the public and the login-required paths. The auth
 // context is set per-request by the gate above; session state is keyed by Mcp-Session-Id,
 // not by path, so a session started on either endpoint resolves the same transport.
-app.post("/mcp", handleMcpPost);
-app.post(AUTH_MCP_PATH, handleMcpPost);
-app.post(LEGACY_MCP_PATH, handleMcpPost);
-app.post(LEGACY_AUTH_MCP_PATH, handleMcpPost);
-app.post(RESEARCH_MCP_PATH, handleMcpPost);
-app.post(MCPRUSH_PATH, handleMcpPost);
+const postMcp = (req: Request, res: Response) => routeMcpRequest(req, res, () => handleMcpPost(req, res));
+app.post("/mcp", postMcp);
+app.post(AUTH_MCP_PATH, postMcp);
+app.post(LEGACY_MCP_PATH, postMcp);
+app.post(LEGACY_AUTH_MCP_PATH, postMcp);
+app.post(RESEARCH_MCP_PATH, postMcp);
+app.post(MCPRUSH_PATH, postMcp);
 app.all(MCPRUSH_PATH, (_req: Request, res: Response) => {
   res.setHeader("Allow", "POST");
   res.status(405).json({ error: "Marketplace transport accepts POST requests." });
@@ -329,16 +361,17 @@ async function handleSessionRequest(req: Request, res: Response): Promise<void> 
   trackActivity(session, res);
   await session.transport.handleRequest(req, res);
 }
-app.get("/mcp", handleSessionRequest);
-app.delete("/mcp", handleSessionRequest);
-app.get(AUTH_MCP_PATH, handleSessionRequest);
-app.delete(AUTH_MCP_PATH, handleSessionRequest);
-app.get(LEGACY_MCP_PATH, handleSessionRequest);
-app.delete(LEGACY_MCP_PATH, handleSessionRequest);
-app.get(LEGACY_AUTH_MCP_PATH, handleSessionRequest);
-app.delete(LEGACY_AUTH_MCP_PATH, handleSessionRequest);
-app.get(RESEARCH_MCP_PATH, handleSessionRequest);
-app.delete(RESEARCH_MCP_PATH, handleSessionRequest);
+const sessionMcp = (req: Request, res: Response) => routeMcpRequest(req, res, () => handleSessionRequest(req, res));
+app.get("/mcp", sessionMcp);
+app.delete("/mcp", sessionMcp);
+app.get(AUTH_MCP_PATH, sessionMcp);
+app.delete(AUTH_MCP_PATH, sessionMcp);
+app.get(LEGACY_MCP_PATH, sessionMcp);
+app.delete(LEGACY_MCP_PATH, sessionMcp);
+app.get(LEGACY_AUTH_MCP_PATH, sessionMcp);
+app.delete(LEGACY_AUTH_MCP_PATH, sessionMcp);
+app.get(RESEARCH_MCP_PATH, sessionMcp);
+app.delete(RESEARCH_MCP_PATH, sessionMcp);
 
 app.listen(config.port, () => {
   console.log(`bullrun-mcp listening on :${config.port} (MCP at /mcp, health at GET /health)`);

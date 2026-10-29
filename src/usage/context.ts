@@ -56,6 +56,10 @@ export interface McpReadCount {
   exhausted?: QuotaNotice;
   /** Resource/attempt protection is separate from the customer's successful-call allowance. */
   capacity?: McpCapacityNotice;
+  /** Bullrun was busy: a screen found no free slot (screenGate.ts) or bullrun-api answered 503 server_busy. */
+  busy?: boolean;
+  /** A bullrun-api request got no usable answer: unreachable, timed out, past its deadline, another 5xx or bad JSON. */
+  upstreamFailed?: boolean;
 }
 
 const storage = new AsyncLocalStorage<McpUsageContext>();

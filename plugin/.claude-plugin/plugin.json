@@ -1,8 +1,8 @@
 {
   "name": "bullrun",
   "displayName": "Bullrun: Global Stock & UCITS ETF Research",
-  "version": "1.0.0",
-  "description": "Research global stocks and UCITS ETFs with Bullrun's stored data, no sign-in needed: compare the UCITS funds on one index by disclosed fee across venues, and run a dated company deep dive that names its data gaps. Descriptive research only, not investment advice.",
+  "version": "1.0.1",
+  "description": "Research global stocks and UCITS ETFs in Claude. Compare fund fees and holdings, or explore a company's financials, risks and valuation signals. Results include data dates and coverage limits. Public research needs no account or API key. Descriptive research, not investment advice.",
   "author": {
     "name": "Bullrun",
     "email": "bullrun-info@protonmail.com",

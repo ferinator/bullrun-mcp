@@ -1,6 +1,6 @@
 {
   "name": "bullrun",
-  "description": "Bullrun research plugin for Claude: global stocks and UCITS ETFs with dated, coverage-aware data.",
+  "description": "Global stock and UCITS ETF research in Claude, with data dates and coverage limits.",
   "owner": {
     "name": "Bullrun",
     "email": "bullrun-info@protonmail.com",
@@ -10,7 +10,7 @@
     {
       "name": "bullrun",
       "source": "./plugin",
-      "description": "Compare the UCITS ETFs on one index by disclosed fee across venues, and run a dated company deep dive that states its gaps. No sign-in needed.",
+      "description": "Compare UCITS fund fees and holdings, or explore company financials, risks and valuation signals. Public research needs no account or API key.",
       "category": "finance"
     }
   ]

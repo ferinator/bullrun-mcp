@@ -148,3 +148,17 @@ test('marketplace plans use their own gateway allowance without a duplicate 700-
   assert.equal(result.isError, undefined)
   assert.equal(calls.length, 0)
 })
+
+test('a spent allowance is filed as a limit and an unconfirmed one as our fault, never the caller\'s', async () => {
+  const events = []
+  const run = () => runWithMcpUsage({ clientIp: '203.0.113.42' },
+    () => recordMcpToolInvocation('compare_stocks', async () => ({ content: [] }), async event => { events.push(event) }))
+  mode = 'spent'
+  await run()
+  mode = 'down'
+  await run()
+  mode = 'normal'
+  await run()
+  assert.deepEqual(events.map(event => [event.outcome, event.failure]),
+    [['error', 'limit'], ['error', 'tool'], ['success', undefined]])
+})

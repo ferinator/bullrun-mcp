@@ -3,6 +3,7 @@ import { test } from 'node:test'
 import { recordMcpToolInvocation } from '../dist/usage/invocations.js'
 import { getMcpUsage, runWithMcpUsage } from '../dist/usage/context.js'
 import { isProbeClient } from '../dist/usage/probes.js'
+import { bullrunGet } from '../dist/bullrun.js'
 
 test('concurrent callbacks keep distinct invocation context and report once each', async () => {
   const events = []
@@ -56,4 +57,37 @@ test('only a probe client\'s invocation carries the probe class', async () => {
   assert.equal(await classOf({ name: 'agentstatus-probe', version: '2.42.170' }), 'probe')
   assert.equal(await classOf({ name: 'claude-ai', version: '0.1.0' }), undefined)
   assert.equal(await classOf(undefined), undefined)
+})
+
+test('a failed call is filed as a limit, our fault or the caller\'s request', async t => {
+  const events = []
+  const reporter = async event => { events.push(event) }
+  let answer
+  t.mock.method(globalThis, 'fetch', async () => answer())
+  const lookup = () => recordMcpToolInvocation('get_stock_metrics', async () => {
+    try { await bullrunGet('/api/stocks/ZZZZ') } catch { return { isError: true, content: [] } }
+    return { content: [] }
+  }, reporter)
+  const cases = [
+    ['unknown ticker', () => Response.json({ error: 'not_found' }, { status: 404 }), 'caller'],
+    ['backend fault', () => Response.json({ error: 'internal' }, { status: 500 }), 'tool'],
+    ['busy backend', () => Response.json({ error: 'server_busy', message: 'busy' }, { status: 503 }), 'limit'],
+    ['unreachable backend', () => { throw new TypeError('fetch failed') }, 'tool'],
+    ['unreadable answer', () => new Response('not json', { status: 200 }), 'tool'],
+  ]
+  for (const [, respond] of cases) {
+    answer = respond
+    await lookup()
+  }
+  assert.deepEqual(events.map(event => event.failure), cases.map(([, , failure]) => failure))
+  assert.equal(events.every(event => event.outcome === 'error'), true)
+
+  events.length = 0
+  await recordMcpToolInvocation('get_etf_fund', async () => ({ isError: true, content: [] }), reporter)
+  await assert.rejects(recordMcpToolInvocation('get_etf_fund', async () => { throw Error('bug') }, reporter))
+  await recordMcpToolInvocation('screen_stocks', async () => ({ content: [] }), reporter, undefined,
+    { take: () => 30, perMinute: 6 })
+  await recordMcpToolInvocation('get_etf_fund', async () => ({ content: [] }), reporter)
+  assert.deepEqual(events.map(event => [event.outcome, event.failure]),
+    [['error', 'caller'], ['throw', 'tool'], ['error', 'limit'], ['success', undefined]])
 })

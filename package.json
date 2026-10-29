@@ -1,6 +1,6 @@
 {
   "name": "bullrun-mcp",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "private": true,
   "type": "module",
   "description": "Find global stock candidates, compare UCITS ETF costs and overlap, and inspect company risks. Free public research; OAuth for saved research and portfolios.",
@@ -14,7 +14,7 @@
     "stdio": "node dist/stdio.js",
     "dev": "tsx watch src/index.ts",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build && node --test scripts/test-platform-links.mjs scripts/test-research-shortlist.mjs scripts/test-research-prompts.mjs scripts/test-invocations.mjs scripts/test-monthly-allowance.mjs scripts/test-monthly-output-validation.mjs scripts/test-tool-operations.mjs scripts/test-client-ip.mjs scripts/test-screen-deadline.mjs scripts/test-compare-stocks.mjs scripts/test-mcprush.mjs scripts/test-research-endpoint.mjs scripts/test-check-mcprush.mjs scripts/test-corporate-calendar.mjs scripts/test-company-exposures.mjs scripts/test-research-history-coverage.mjs scripts/test-stock-discovery.mjs scripts/test-stock-price-history-news.mjs scripts/test-release-catalog.mjs scripts/test-holding-identity.mjs scripts/test-etf-classification.mjs scripts/test-etf-returns.mjs scripts/test-etf-discovery-regressions.mjs scripts/test-etf-exposures.mjs scripts/test-stock-search-names.mjs scripts/test-financial-quality.mjs scripts/test-etf-overlap-merge.mjs scripts/test-portfolio-fit-merge.mjs scripts/test-ticker-resolution.mjs scripts/test-event-folding.mjs scripts/test-research-feeds.mjs scripts/test-read-failures.mjs scripts/test-float-rounding.mjs && node scripts/test-auth.mjs && node scripts/test-e2e.mjs && node scripts/test-authless.mjs && node scripts/test-sessions.mjs",
+    "test": "npm run build && node --test scripts/test-platform-links.mjs scripts/test-research-shortlist.mjs scripts/test-research-prompts.mjs scripts/test-invocations.mjs scripts/test-monthly-allowance.mjs scripts/test-monthly-output-validation.mjs scripts/test-tool-operations.mjs scripts/test-client-ip.mjs scripts/test-screen-deadline.mjs scripts/test-compare-stocks.mjs scripts/test-mcprush.mjs scripts/test-research-endpoint.mjs scripts/test-check-mcprush.mjs scripts/test-corporate-calendar.mjs scripts/test-company-exposures.mjs scripts/test-research-history-coverage.mjs scripts/test-stock-discovery.mjs scripts/test-stock-price-history-news.mjs scripts/test-release-catalog.mjs scripts/test-protocol-versions.mjs scripts/test-holding-identity.mjs scripts/test-etf-classification.mjs scripts/test-etf-returns.mjs scripts/test-etf-discovery-regressions.mjs scripts/test-etf-exposures.mjs scripts/test-stock-search-names.mjs scripts/test-financial-quality.mjs scripts/test-etf-overlap-merge.mjs scripts/test-portfolio-fit-merge.mjs scripts/test-ticker-resolution.mjs scripts/test-event-folding.mjs scripts/test-research-feeds.mjs scripts/test-read-failures.mjs scripts/test-float-rounding.mjs && node scripts/test-auth.mjs && node scripts/test-e2e.mjs && node scripts/test-authless.mjs && node scripts/test-sessions.mjs",
     "test:auth": "node scripts/test-auth.mjs",
     "test:e2e": "node scripts/test-e2e.mjs",
     "test:authless": "node scripts/test-authless.mjs",
@@ -28,20 +28,26 @@
     "check:mcprush": "node scripts/check-mcprush.mjs",
     "check:research": "node scripts/check-research-catalog.mjs --endpoint https://mcp.bull-run.org/research/mcp",
     "test:check-mcprush": "node --test scripts/test-check-mcprush.mjs",
-    "inspector": "npx -y @modelcontextprotocol/inspector"
+    "inspector": "npx -y @modelcontextprotocol/inspector",
+    "test:protocol": "npm run build && node --test scripts/test-protocol-versions.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@modelcontextprotocol/client": "^2.4.0",
+    "@modelcontextprotocol/core": "^2.4.0",
+    "@modelcontextprotocol/node": "^2.1.2",
+    "@modelcontextprotocol/sdk": "^1.32.2",
+    "@modelcontextprotocol/server": "^2.4.0",
     "cors": "^2.8.5",
-    "express": "^5.2.1",
-    "jose": "^6.2.3",
-    "zod": "^3.25.0"
+    "express": "^5.3.0",
+    "jose": "^6.2.14",
+    "zod": "^3.25.0",
+    "zod-to-json-schema": "^3.25.2"
   },
   "devDependencies": {
     "@types/cors": "^2.8.17",
     "@types/express": "^5.0.6",
-    "@types/node": "^22.0.0",
-    "tsx": "^4.20.0",
+    "@types/node": "^22.20.5",
+    "tsx": "^4.23.15",
     "typescript": "^5.6.0"
   }
 }

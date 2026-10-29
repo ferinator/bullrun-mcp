@@ -29,7 +29,16 @@ export interface ToolInvocation {
   /** Which MCP allowance ran out during the call, e.g. "caller:30d". */
   quotaExhausted?: string;
   capacityLimited?: boolean;
+  /** Why a call that did not succeed failed; absent on success. */
+  failure?: ToolFailure;
 }
+
+/**
+ * limit: an allowance, the per-minute pacing or a busy server turned the call away.
+ * caller: the call could not be answered as asked (sign-in needed, missing or invalid arguments,
+ * unknown ticker, nothing found). tool: our fault, a crash or a backend that failed or did not answer.
+ */
+export type ToolFailure = "limit" | "caller" | "tool";
 
 type Reporter = (event: ToolInvocation) => Promise<unknown>;
 const report: Reporter = event => bullrunPost(MCP_TOOL_REPORT_PATH, event, 750);
@@ -54,6 +63,8 @@ export async function recordMcpToolInvocation<T>(
     let monthly: MonthlyReservation | undefined;
     let settled = false;
     let callbackSucceeded = false;
+    // The allowance service, a settlement or the tool itself failed on our side.
+    let fault = false;
     try {
       const retryAfter = limiter.take(toolName, heavyToolCallerKey());
       if (retryAfter > 0) {
@@ -65,6 +76,7 @@ export async function recordMcpToolInvocation<T>(
         monthly = await reserveMonthlyAllowance(usage.invocationId);
       } catch {
         outcome = "error";
+        fault = true;
         return (reads.capacity ? capacityResult(reads) : monthlyUnavailableResult()) as T;
       }
       if (monthly && !monthly.allowed) {
@@ -77,6 +89,8 @@ export async function recordMcpToolInvocation<T>(
       try {
         result = await callback();
       } catch (err) {
+        // An exception that escaped the tool is ours, unless a limit explains it (failureKind checks those first).
+        fault = true;
         if (writes.attempted) {
           outcome = "error";
           return interruptedWriteResult(writes) as T;
@@ -111,6 +125,7 @@ export async function recordMcpToolInvocation<T>(
         settled = true;
       } catch {
         outcome = "error";
+        fault = true;
         return (callbackSucceeded ? uncertainSettlementResult(result)
           : writes.attempted ? result : monthlyUnavailableResult()) as T;
       }
@@ -133,10 +148,19 @@ export async function recordMcpToolInvocation<T>(
           outcome, durationMs: Math.max(0, Date.now() - started), apiCalls, meteredReads, rateLimited,
           quotaExhausted: reads.exhausted ? quotaLabel(reads.exhausted) : undefined,
           capacityLimited: reads.capacity ? true : undefined,
+          failure: outcome === "success" ? undefined : failureKind(outcome, reads, rateLimited, fault),
         });
       } catch { /* analytics must never interrupt a tool */ }
     }
   });
+}
+
+/** Limits come first, then our faults; whatever is left is the caller's request. */
+function failureKind(outcome: ToolInvocation["outcome"], reads: McpReadCount, rateLimited: boolean | undefined,
+  fault: boolean): ToolFailure {
+  if (rateLimited || reads.exhausted || reads.capacity || reads.busy) return "limit";
+  if (outcome === "throw" || fault || reads.upstreamFailed) return "tool";
+  return "caller";
 }
 
 function capacityResult(reads: McpReadCount) {

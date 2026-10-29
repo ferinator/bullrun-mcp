@@ -1,4 +1,8 @@
-# Connect Bullrun to your AI client
+# Connect Bullrun to your AI assistant
+
+1. Choose public research, or your Bullrun account for saved research and portfolios.
+2. Copy the server URL into your assistant's custom MCP connection settings.
+3. Enable Bullrun in a chat and ask a research question.
 
 Bullrun runs a hosted **remote MCP server** at:
 
@@ -16,6 +20,18 @@ Use one of these endpoints per client: `/mcp` to try research anonymously, or
 guarantee that a client will offer login. Anonymous stdio is also available.
 
 The [MCP product page](https://bull-run.org/mcp) explains the workflows and endpoint choices.
+
+Find the existing listings on [Glama](https://glama.ai/mcp/connectors/org.bull-run/bullrun),
+[mcprush Bullrun](https://mcprush.com/bull-run/bullrun-mcp) and
+[mcprush Bullrun Research](https://mcprush.com/bull-run/bullrun-research-mcp).
+Bullrun Research is the marketplace research connection; its plans and installation quotas
+are separate from Bullrun Pro. For Claude, use the
+[existing directory listing](https://claude.ai/directory/11ba8b53-a2ec-4029-87d6-030719898503)
+or the [setup guide](https://bull-run.org/connect-claude).
+
+<details>
+<summary>Usage limits</summary>
+
 Free use includes **700 successful MCP tool calls per rolling 30 days**, per free account
 or anonymous network, shared across the official public, research and OAuth endpoints.
 Connected Pro and active-trial accounts get **1,000 successful tool calls per rolling 5 hours**.
@@ -26,8 +42,20 @@ earlier calls leave the rolling window. Temporary capacity limits and tool pacin
 to wait; follow the retry guidance in the reply. MCP allowances are separate from website
 and marketplace policies, which are unchanged.
 
+</details>
+
 > No JSON editing required for Claude — add the remote URL in the connector settings. The configs
 > below are for clients that connect via a file.
+
+## Protocol compatibility and response size
+
+Bullrun 0.9.0 supports the current MCP 2026-07-28 protocol and older clients that use
+an `initialize` handshake, over the same server URLs. Existing authentication and
+tool access do not change. Reconnect if your assistant keeps an older cached catalog.
+
+Financial history starts with five fiscal years of annual statements and a growth
+summary. Ask for quarterly statements, both period types or up to 15 fiscal years
+when needed; pass `periodType` and `years` explicitly in a tool call.
 
 ## What you can do once connected
 

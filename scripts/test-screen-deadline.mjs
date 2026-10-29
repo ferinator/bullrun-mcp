@@ -7,7 +7,8 @@ const { bullrunGet, bullrunPost } = await import('../dist/bullrun.js')
 const { runWithGateway, getGateway } = await import('../dist/gateway/context.js')
 const { runWithAuth } = await import('../dist/auth/context.js')
 const { runWithMcpUsage } = await import('../dist/usage/context.js')
-const { createGate, screenGate } = await import('../dist/usage/screenGate.js')
+const { createGate, screenGate, SCREEN_MAX_WAIT_MS } = await import('../dist/usage/screenGate.js')
+const { recordMcpToolInvocation } = await import('../dist/usage/invocations.js')
 
 function clock(t) {
   let now = 1_000_000
@@ -164,4 +165,27 @@ test('a short analytics timeout does not shorten the gateway deadline for subseq
   assert.deepEqual(calls.map(call => call.url.pathname), ['/api/analytics/mcp-tools', '/api/etfs/screener'])
   assert.equal(screenGate.active, 0)
   assert.equal(screenGate.waiting, 0)
+})
+
+test('a screen turned away by a full queue is filed as a limit, not as the caller\'s error', async t => {
+  const time = clock(t)
+  const calls = captureFetch(t)
+  const holder = holdSlot()
+  const events = []
+  const pending = recordMcpToolInvocation('screen_stocks', async () => {
+    try { await bullrunPost('/api/screener/filter', {}) } catch { return { isError: true, content: [] } }
+    return { content: [] }
+  }, async event => { events.push(event) })
+  try {
+    await new Promise(resolve => setImmediate(resolve))
+    assert.equal(screenGate.waiting, 1)
+    time.advance(SCREEN_MAX_WAIT_MS)
+    assert.equal((await pending).isError, true)
+  } finally {
+    holder.release()
+    await Promise.allSettled([holder.done, pending])
+  }
+  assert.deepEqual(events.map(event => [event.outcome, event.failure]), [['error', 'limit']])
+  assert.equal(calls.length, 0)
+  assert.equal(screenGate.active, 0)
 })

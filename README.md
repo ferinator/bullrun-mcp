@@ -15,6 +15,7 @@ An MCP server for researching stocks and ETFs beyond the US. Find global stock c
 | Registry | [`org.bull-run/bullrun`](https://registry.modelcontextprotocol.io/v0.1/servers?search=org.bull-run%2Fbullrun) |
 | Glama | [Server](https://glama.ai/mcp/servers/ferinator/bullrun-mcp) · [Connector](https://glama.ai/mcp/connectors/org.bull-run/bullrun) |
 | mcprush | [Bullrun MCP](https://mcprush.com/bull-run/bullrun-mcp) · [Bullrun Research](https://mcprush.com/bull-run/bullrun-research-mcp) (research tools only, with quotas per installation) |
+| Claude | [Bullrun research connector](https://claude.ai/directory/11ba8b53-a2ec-4029-87d6-030719898503) · [Setup guide](https://bull-run.org/connect-claude) |
 | Privacy | [Privacy policy](https://bull-run.org/privacy) |
 
 ## Connect
@@ -46,7 +47,9 @@ Use the prompt menu for `find_ml_candidates` (compare model candidates with busi
 
 ## Tools
 
-Version 0.8.1 exposes 48 focused tools in both hosted and local builds (39 research tools on the marketplace connection). The exact tools and parameters are available through MCP `tools/list`.
+Version 0.9.0 exposes 48 focused tools in both hosted and local builds (39 research tools on the research-only and marketplace connections). The exact tools and parameters are available through MCP `tools/list`.
+
+The hosted server and local stdio build support MCP 2026-07-28 and older initialization-based clients. Existing server URLs and OAuth requirements stay the same; reconnect if your client caches the catalog. Server guidance is shorter, and `get_financial_history` defaults to five fiscal years of annual statements. Request `years` (1-15) and `periodType: "quarterly"` or `"both"` explicitly when you need more detail. Responses retain dates, currencies, coverage and growth summaries.
 
 | Workflow | Tools |
 | --- | --- |

@@ -11,7 +11,7 @@ const monthsAgo = months => {
 
 export const RESEARCH_EXAMPLES = [
   { tool: "search_stocks", args: { query: "Nestle", limit: 5 },
-    prompt: "Find Nestle's stock listings and tell me which one is the primary line." },
+    prompt: "Find Nestle's stock and give me its ticker, exchange and ISIN." },
   { tool: "screen_stocks", args: { action: "run", preset: "dividend_income", countries: ["Germany"], limit: 10 },
     prompt: "Run the dividend income screen on German stocks and show the exact rules it used." },
   { tool: "find_stock_peers", args: { ticker: "MSFT", limit: 5 },

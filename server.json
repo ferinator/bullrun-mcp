@@ -3,7 +3,7 @@
   "name": "org.bull-run/bullrun",
   "title": "Bullrun: Global Stock & UCITS ETF Research",
   "description": "Free, no sign-up: global stocks, UCITS ETF costs and overlap, company risk and macro, all dated.",
-  "version": "0.8.1",
+  "version": "0.9.0",
   "websiteUrl": "https://bull-run.org/mcp",
   "icons": [
     {

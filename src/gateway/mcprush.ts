@@ -33,7 +33,7 @@ export function mcprushGate(req: Request, res: Response, next: NextFunction): vo
   }
   const presentedListing = req.headers["x-mcprush-listing"];
   const installationId = req.headers["x-mcprush-install"];
-  const discoveryOnly = ["initialize", "notifications/initialized", "tools/list", "ping"].includes(req.body?.method);
+  const discoveryOnly = ["server/discover", "initialize", "notifications/initialized", "tools/list", "ping"].includes(req.body?.method);
   // Studio Verify omits both identity headers. Only token-authenticated discovery
   // may use the configured listing; a supplied identity is never repaired.
   const listingId = presentedListing === undefined && installationId === undefined &&

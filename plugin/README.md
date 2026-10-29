@@ -1,6 +1,8 @@
 # Bullrun: Global Stock & UCITS ETF Research
 
-Research global stocks and UCITS ETFs in Claude with [Bullrun](https://bull-run.org)'s stored market data. The plugin bundles Bullrun's public research connector with two skills that teach Claude a careful workflow for common research tasks. Every figure is dated, missing data is reported as unknown, and the output describes the data. It is not investment advice. No sign-in or API key is needed.
+Research global stocks and UCITS ETFs in Claude with [Bullrun](https://bull-run.org). Compare fund fees and holdings, or explore a company's financials, risks and valuation signals. The plugin includes Bullrun's public research connector and two research skills. Results show their dates and coverage limits. No account or API key is needed.
+
+Find the [Bullrun research connector in Claude's directory](https://claude.ai/directory/11ba8b53-a2ec-4029-87d6-030719898503), or follow the [three-step setup guide](https://bull-run.org/connect-claude) for a custom connection. The same research server is also available through [Glama](https://glama.ai/mcp/connectors/org.bull-run/bullrun) and [Bullrun Research on mcprush](https://mcprush.com/bull-run/bullrun-research-mcp). The mcprush connection has its own plans and usage limits.
 
 ## Skills
 

@@ -3,11 +3,14 @@ import { afterEach, beforeEach, test } from 'node:test'
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
+import { Client as ModernClient, InMemoryTransport as ModernInMemoryTransport } from '@modelcontextprotocol/client'
 import { z } from 'zod'
 
 process.env.MCP_ALLOWANCE_ENABLED = 'true'
 process.env.BULLRUN_MCP_GATEWAY_SECRET = 'output-validation-test-secret-at-least-32-bytes'
 const { instrumentMcpTools } = await import('../dist/usage/invocations.js')
+const { createMcpServer, MAX_TOOL_INPUT_ELEMENTS } = await import('../dist/mcpServer.js')
+const { createModernMcpServer } = await import('../dist/sdkV2.js')
 
 const originalFetch = globalThis.fetch
 let calls
@@ -117,6 +120,41 @@ test('SDK input validation failures never reserve a successful-call slot', async
   assert.equal(result.isError, true)
   assert.equal(ran, false)
   assert.equal(calls.length, 0)
+})
+
+test('both protocol generations reject oversized collections before element validation or allowance work', async t => {
+  for (const modern of [false, true]) {
+    await t.test(modern ? 'current SDK' : 'legacy SDK', async () => {
+      calls = []
+      let parsed = 0
+      let executed = 0
+      const server = modern ? createModernMcpServer() : createMcpServer()
+      server.registerTool('collection_validation_test', {
+        inputSchema: { values: z.array(z.string().refine(() => { parsed++; return true })) },
+      }, async () => { executed++; return { content: [] } })
+      const client = modern ? new ModernClient({ name: 'collection-current-test', version: '1' })
+        : new Client({ name: 'collection-legacy-test', version: '1' })
+      const Transport = modern ? ModernInMemoryTransport : InMemoryTransport
+      const [clientSide, serverSide] = Transport.createLinkedPair()
+      try {
+        await server.connect(serverSide)
+        await client.connect(clientSide)
+        const rejected = await client.callTool({ name: 'collection_validation_test',
+          arguments: { values: Array(MAX_TOOL_INPUT_ELEMENTS + 1).fill('x') } })
+        assert.equal(rejected.isError, true)
+        assert.match(rejected.content[0].text, /maximum of 10000 elements/)
+        assert.equal(parsed, 0, 'the SDK must reject before walking array elements')
+        assert.equal(executed, 0)
+        assert.equal(calls.length, 0, 'rejection must neither reserve allowance nor report a callback')
+
+        const accepted = await client.callTool({ name: 'collection_validation_test', arguments: { values: ['a', 'b'] } })
+        assert.equal(accepted.isError, undefined)
+        assert.equal(parsed, 2)
+        assert.equal(executed, 1)
+        assertSettlement(true)
+      } finally { await Promise.allSettled([client.close(), server.close()]) }
+    })
+  }
 })
 
 test('unknown settlement preserves the completed saved result and never sends the opposite outcome', async () => {

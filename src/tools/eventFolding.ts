@@ -7,7 +7,8 @@
  * Reports found within three days share topical headline words (china + door),
  * or a rare subject plus supporting text. A shared investigation headline kind
  * (probe, inquiry) can support a single rare headline subject; when the subject
- * appears only in the other report's summary, another rare shared detail is needed.
+ * appears only in the other report's summary, that report must cover at least half
+ * of the headline's topical words and share another rare detail.
  * Safety and legal classifications may disagree on investigations; those two types
  * may fold when both headlines describe an investigation. The representative keeps
  * its original type.
@@ -59,8 +60,8 @@ const GENERIC = new Set([
 
 /** Investigation words support a subject match, never provide a topical anchor. */
 const INVESTIGATION_WORDS = new Set([
-  "investigation", "investigate", "investigates", "investigating", "investigated",
-  "probe", "probing", "probed", "inquiry",
+  "investigation", "investigations", "investigate", "investigates", "investigating", "investigated",
+  "probe", "probes", "probing", "probed", "inquiry", "inquiries",
 ]);
 
 // tokens() singularizes words; exclude every investigation form from topical evidence.
@@ -131,11 +132,16 @@ export function foldDuplicateEvents<T extends FoldableEvent>(rows: T[], companyN
     if (headlineAnchors.length >= 2) return true;
     if (bothInvestigations && headlineAnchors.some(isRare)) return true;
     // Yahoo's headline says "no steering wheel", but its summary names Cybercab.
-    // Require rare topical evidence from at least one headline, in either direction.
+    // Require rare topical evidence from at least one headline, in either direction,
+    // and only from a headline the other report mostly covers: a law firm's notice
+    // ("... Encourages Investors to Inquire About Securities Class Action Investigation")
+    // shares "investors" and "securities" with any market story about a probe.
     const anchors = new Set(headlineAnchors);
     if (bothInvestigations) {
-      for (const word of a.anchors) if (b.words.has(word) && isRare(word)) anchors.add(word);
-      for (const word of b.anchors) if (a.words.has(word) && isRare(word)) anchors.add(word);
+      for (const [from, to] of [[a, b], [b, a]] as const) {
+        const covered = [...from.anchors].filter((word) => to.words.has(word) && isRare(word));
+        if (covered.length * 2 >= from.anchors.size) for (const word of covered) anchors.add(word);
+      }
     }
     if (anchors.size === 0) return false;
     let rare = 0;

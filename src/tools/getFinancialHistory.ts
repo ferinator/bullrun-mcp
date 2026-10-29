@@ -284,10 +284,10 @@ function sourceCurrencies(rows: HistoryRow[]): string[] {
 const inputSchema = {
   ticker: z.string().min(1)
     .describe("The Bullrun ticker. " + TICKER_CONVENTION),
-  periodType: z.enum(["annual", "quarterly", "both"]).default("both")
-    .describe("Return annual rows, quarterly rows, or both. Annual rows use fiscalQuarter=0."),
-  years: z.number().int().min(1).max(15).default(10)
-    .describe("How many fiscal years of history to return, counting backward from the latest fiscal year available."),
+  periodType: z.enum(["annual", "quarterly", "both"]).default("annual")
+    .describe("Defaults to annual statements with a growth summary. Choose quarterly or both for detailed period research. Annual rows use fiscalQuarter=0."),
+  years: z.number().int().min(1).max(15).default(5)
+    .describe("Fiscal-year window counting backward from the latest available fiscal year. Default 5; request up to 15 for longer research."),
   includeEmptyRows: z.boolean().default(false)
     .describe("Include sparse rows that have no major income statement, balance sheet, cash-flow, or EPS values."),
 };
@@ -299,7 +299,7 @@ export function registerGetFinancialHistory(server: McpServer): void {
       title: "Get financial history",
       annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: false },
       description:
-        "Fetch 1-15 years of historical financial statements for one exact Bullrun ticker. Returns annual and/or quarterly rows grouped into income statement, balance sheet, cash flow, per-share metrics, margins, source currency, and annual growth/CAGR consistency checks. Use this when evaluating multi-year revenue/net-income growth, margin trajectories, leverage, cash flow quality, or whether a stock passed a rule such as 10% revenue and net-income growth every year.",
+        "Read historical financial statements for one exact Bullrun ticker, with growth/CAGR consistency checks first, then income, balance sheet, cash flow, per-share metrics, margins and source currency. Defaults to a five-fiscal-year window of annual rows; request years=1-15 and periodType=quarterly or both for more detail. Use for growth consistency, margins, leverage and cash-flow quality; read the period/currency coverage before comparing.",
       inputSchema,
     },
     async (args) => {
@@ -355,10 +355,17 @@ export function registerGetFinancialHistory(server: McpServer): void {
             latestFiscalYear: latestFiscalYear(rawRows),
             annualRows: annual.length,
             quarterlyRows: quarterly.length,
+            returnedRows: selectedRows.length,
             sourceCurrencies: sourceCurrencies(selectedRows),
             annualRowsMayIncludeRollups: true,
           },
           summary: growthSummary(annual),
+          methodology: {
+            window: "Fiscal years are counted backward from the latest stored usable fiscal year; missing periods are not filled.",
+            growth: "Growth compares adjacent stored annual rows, which may span missing years. CAGR uses positive stored annual values and elapsed fiscal years; neither normalizes currency changes.",
+            statements: "Annual rows may include stored rollups. Read sourceCurrency and reportingScale on each row; reporting periods are not publication or collection dates.",
+            detail: "Default: five fiscal years of annual rows. Set years and periodType explicitly for longer or quarterly research.",
+          },
           annual: periodType === "quarterly" ? undefined : annual,
           quarterly: periodType === "annual" ? undefined : quarterly,
           warnings,
